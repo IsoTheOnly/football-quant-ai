@@ -449,10 +449,10 @@ window.__fqStartApp = function () {
           ["Cote juste", "1 ÷ probabilité : la cote à laquelle le pari est neutre. 50 % → 2,00."],
           ["Marge", "Commission du bookmaker cachée dans ses cotes : 10 à 13 % chez les bookmakers français sur un 1N2."],
           ["Espérance (EV)", "Gain moyen par euro misé si on jouait le pari une infinité de fois : probabilité × cote − 1. 55 % × 2,00 − 1 = +10 %."],
-          ["Value bet", "Pari dont la cote réelle est assez au-dessus de la cote juste pour une espérance d'au moins +" + evMin + " %, avec une fiabilité suffisante. C'est la seule situation où un pari est intéressant à long terme. Rare : les cotes françaises sont presque toujours sous la cote juste."],
+          ["Value bet", "Pari dont la cote française est assez au-dessus de la cote juste (celle de Pinnacle quand elle est relevée) pour une espérance d'au moins +" + evMin + " %, avec une fiabilité suffisante. C'est la seule situation où un pari est intéressant à long terme. Rare : les cotes françaises sont presque toujours sous la cote juste."],
           ["Intéressant dès", "Cote minimale pour une espérance d'au moins +" + evMin + " % : (1 + " + evMin + " %) ÷ probabilité."],
           ["Rendement d'une sélection", "Probabilité × cote. 1 = prix juste ; 0,90 = le bookmaker garde 10 %. La chance d'un ticket = produit des rendements ÷ cote totale."],
-          ["Modèle seul / marché", "Modèle seul : notre estimation à partir des résultats et des buts, sans les cotes. Marché : les cotes des bookmakers, marge retirée. Quand ils divergent de plus de 8 points, c'est le plus souvent le marché qui avait raison."],
+          ["Modèle seul / marché", "Modèle seul : notre estimation à partir des résultats et des buts, sans les cotes. Marché : la cote de référence la plus juste disponible (Pinnacle, sinon une bourse, sinon Bet 365 ou la médiane française), marge retirée. Quand ils divergent de plus de 8 points, c'est le plus souvent le marché qui avait raison."],
           ["Prudence", "Quand modèle et marché divergent, la chance d'une sélection est diminuée pour construire les tickets."],
           ["Correction d'une stratégie", "Tickets gagnés ÷ tickets annoncés par cette stratégie dans le passé. Au-dessus de 1 : ses tickets passent plus souvent qu'annoncé."],
           ["Multiboost", "Bonus de cote Betclic selon le nombre de sélections. Désactivé par défaut (Paramètres)."],
@@ -1963,6 +1963,21 @@ window.__fqStartApp = function () {
     <//>`;
   }
 
+  /** Value bets : prix français au-dessus de la cote juste de la référence (Pinnacle quand elle est relevée), suivis à la clôture */
+  function ValueCard({ ctx }) {
+    const v = useMemo(() => FQ.P.valueSummary(ctx.state), [ctx.state.picks]);
+    const ev = Math.round(100 * (ctx.settings.evMin || 0.03));
+    return html`<${Card} eyebrow="Battre le marché" title="Prix français contre la cote juste de référence">
+      <p className="muted small lead">On ne cherche pas à prédire mieux que Pinnacle (le marché le plus précis) : on cherche les cotes françaises qui paient plus que sa cote juste, d'au moins ${ev} %. C'est la méthode éprouvée : sur l'historique 2024-2026, parier au meilleur prix du marché quand il dépasse la cote juste Pinnacle de 2 % donnait une espérance de +2,9 % à la clôture (621 paris). Chez les bookmakers français, plus taxés, ces occasions sont rares : on les compte ici.</p>
+      <div className="stats">
+        <${Stat} label="Value bets repérées" value=${v.n} sub=${`${v.sharp} contre Pinnacle ou une bourse · ${v.open} en cours`} />
+        <${Stat} label="Réglées" value=${v.done ? `${v.won}/${v.done}` : "—"} sub=${v.roi === null ? "aucune réglée" : `rendement ${sgn(100 * v.roi, 1)} %${v.roiCI ? ` (IC ${sgn(100 * v.roiCI[0], 0)} à ${sgn(100 * v.roiCI[1], 0)} %)` : ""}`} tone=${v.roi > 0 ? "pos" : v.roi < 0 ? "neg" : null} />
+        <${Stat} label="Espérance à la clôture (CLV)" value=${v.clv === null ? "—" : sgn(100 * v.clv, 1) + " %"} sub=${v.clvN ? `${v.clvPos}/${v.clvN} au-dessus de la clôture${v.clvCI ? ` · IC ${sgn(100 * v.clvCI[0], 1)} à ${sgn(100 * v.clvCI[1], 1)} %` : ""}` : "mesurée après le coup d'envoi"} tone=${v.clv > 0 ? "pos" : v.clv < 0 ? "neg" : null} />
+      </div>
+      <p className="tiny muted mt-1">Une CLV positive et stable sur quelques centaines de paris est la preuve d'un vrai avantage, bien avant que les gains ne le confirment. Les value bets ne sont jamais jouées automatiquement en argent réel.</p>
+    <//>`;
+  }
+
   function Performance({ ctx }) {
     const { state, acct, settings } = ctx;
     const [hq, setHq] = useState(""); const [hComp, setHComp] = useState("ALL"); const [hMarket, setHMarket] = useState("ALL"); const [hStatus, setHStatus] = useState("ALL");
@@ -1995,6 +2010,7 @@ window.__fqStartApp = function () {
     }
 
     return html`<div className="stack">
+      <${ValueCard} ctx=${ctx} />
       <${ForecastCard} ctx=${ctx} />
       <${LearningCard} ctx=${ctx} />
       <${ClvCard} ctx=${ctx} />

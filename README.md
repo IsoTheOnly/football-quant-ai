@@ -57,6 +57,10 @@ node src/runner.js summary <dossier>               # résumé hebdomadaire des t
 
 Si ESPN est injoignable, `run` sort avec le code 3 et écrit `fetch_plan.json` ; la tâche lit alors les pages par le web et relance avec `--fetched`.
 
+## Battre le marché
+
+Personne ne prédit mieux que Pinnacle avec des résultats et des buts seulement : quatre essais (recalibrer le marché, mélanger marché et modèle, prévoir le mouvement de cote, amplifier les forces) ont été rejetés sur la validation. La méthode retenue : Pinnacle (et les bourses Betfair, Matchbook) relevé dans le même appel que les bookmakers français (paramètre `bookmakers`, ≤ 10 = 1 crédit), utilisé comme cote juste ; une cote française au-dessus de cette cote juste + 3 % est une value bet, suivie à la clôture (CLV). Historique 2024-2026 : meilleur prix > cote juste Pinnacle + 2 % → espérance à la clôture +2,9 % sur 621 paris.
+
 ## Cotes
 
 1N2 : cote relevée chez un bookmaker, jamais calculée :

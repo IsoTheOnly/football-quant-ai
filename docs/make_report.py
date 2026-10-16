@@ -305,6 +305,18 @@ story.append(table([
     ["Understat", "xG des 6 grands championnats", "Pas d'API officielle : il faudrait aspirer le site, conditions d'utilisation non claires", "Écarté (règle : aucun contournement)"],
     ["StatsBomb Open Data", "Événements détaillés", "Gratuit, mais compétitions passées choisies seulement", "Inutile pour les matchs à venir"],
 ], [36 * mm, 42 * mm, 56 * mm, 36 * mm]))
+story.append(P("7.8 Comment battre le marché : ce qui a été essayé", "h2"))
+story.append(table([
+    ["Expérience (apprise sur l'apprentissage, jugée sur la validation)", "Résultat", "Décision"],
+    ["Recalibrer les cotes du marché (biais favori-outsider)", "Validation : +0,0009 de log loss (pire)", "Rejetée"],
+    ["Mélanger marché et modèle par régression", "Le poids appris du modèle est négatif ; validation +0,0010 (pire)", "Rejetée"],
+    ["Le modèle annonce-t-il le mouvement de la cote jusqu'à la clôture ?", "Corrélation 0,02 (validation) : non", "Rejetée"],
+    ["Amplifier les écarts de force du modèle", "Validation +0,0005 (pire)", "Rejetée"],
+    ["Parier au meilleur prix quand il dépasse la cote juste Pinnacle de 2 % (2024-2026)", "621 paris, espérance à la clôture +2,9 %, rendement +0,5 % (IC −14 % à +13 %)", "Retenue, appliquée aux bookmakers français"],
+], [70 * mm, 66 * mm, 34 * mm]))
+story.append(P("Conclusion : personne ne prédit mieux que le marché le plus précis (Pinnacle) avec des résultats et des buts seulement. La voie éprouvée consiste à utiliser Pinnacle comme cote juste et à chercher les bookmakers français qui paient plus. "
+               "Depuis le 16/10/2026, Pinnacle et deux bourses (Betfair, Matchbook) sont relevés dans le même appel que les bookmakers français, sans crédit supplémentaire. Toute cote française au-dessus de la cote juste Pinnacle + 3 % devient une value bet, suivie à la clôture (carte « Prix français contre la cote juste de référence »). "
+               "Les occasions seront rares, car les bookmakers français prennent 10 à 13 % de marge contre 2 à 4 % chez Pinnacle ; les cotes boostées que tu saisis sont jugées de la même façon.", "small"))
 story.append(P("7.7 Audit des tickets et de leurs dépendances", "h2"))
 rows = [["Niveau", "Stratégie de départ", "Tickets gagnés / annoncés", "Sélections gagnées / annoncées", "Aux cotes Bet 365 brutes (passé · test)"]]
 for sc in T["tickets"]["scenarios"]:
@@ -355,6 +367,7 @@ story.append(table([
     ["Recommandation", "État", "Ce qui a été fait / limite"],
     ["P1 · Sanctuariser la validation", "Opérationnel", "Test final figé au 16/10/2026 (référence) ; registre prospectif des prévisions réellement émises, évalué par horizon et par version avec IC. Fuites vérifiées dans le code : modèle, classements, buteurs et forme n'utilisent que les matchs antérieurs. Réserve : au Brésil, au Japon et en Suisse, l'historique ne fournit que la cote de clôture, connue au coup d'envoi seulement."],
     ["P2 · Historiser toutes les prévisions", "Opérationnel", "Un instantané par horizon (J-14, J-7, J-3, J-1, J-0) et un au coup d'envoi, jamais réécrits. Les versions intermédiaires entre deux horizons ne sont pas gardées (volume)."],
+    ["Battre le marché", "En place, à mesurer", "Pinnacle relevé comme cote juste ; value bets aux prix français mesurées à la clôture (CLV). Quatre tentatives de faire mieux que le marché par le modèle : toutes rejetées sur la validation."],
     ["P3 · Drivers gratuits", "Partiel", "Repos et congestion testés et rejetés (rien de démontré). Blessures et compositions : API-Football gratuite à tester (compte requis). xG : pas de source gratuite sans aspiration de site."],
     ["P4 · Indépendance face aux bookmakers", "Opérationnel", "Chaque pronostic affiche modèle seul, marché, retenue, poids appliqué, écart et origine du choix ; une probabilité tirée du marché est dite comme telle."],
     ["P5 · Tickets et corrélations", "Opérationnel", "Une sélection par match ; annoncé contre observé ; comparaison par nombre de sélections ; politique de choix rejouée sans regarder l'avenir ; « aucun ticket admissible » sous un seuil d'espérance."],
@@ -378,7 +391,7 @@ story.append(KeepTogether([P("Mini-guide", "h2")] + bullets([
 
 story.append(P("12. Architecture technique", "h1"))
 story.append(P("Le code est sur GitHub (dépôt privé IsoTheOnly/football-quant-ai). La page est un fichier HTML autonome (React), publiée comme artefact Claude ; sa base de données partagée stocke l'état. "
-               "Un exécuteur Node (src/runner.js) fait tourner le même moteur que la page. 35 tests automatiques couvrent le moteur, les données, les cotes, les règlements, la CLV, un cycle complet et le rendu de la page. "
+               "Un exécuteur Node (src/runner.js) fait tourner le même moteur que la page. 36 tests automatiques couvrent le moteur, les données, les cotes, les règlements, la CLV, un cycle complet et le rendu de la page. "
                "Fichiers principaux : src/engine.js (modèle), src/etl2.js (données), src/train2.js (entraînement), src/autopilot.js (pronostics, tickets, apprentissage), src/app.js (interface).", "small"))
 story.append(Spacer(1, 6))
 story.append(P("Avertissement : outil personnel d'aide à la décision. Aucune rentabilité n'est garantie ; ne pariez que ce que vous pouvez perdre. Aide : joueurs-info-service.fr — 09 74 75 13 13.", "small"))

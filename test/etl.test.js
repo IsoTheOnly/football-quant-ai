@@ -93,14 +93,31 @@ test("The Odds API : rattachement au bon match malgré des noms différents", ()
   const target = M.find((m) => m.comp === "FL1" && m.status === "PROGRAMMÉ" && m.date >= "2026-10-16");
   assert.ok(target);
   const ev = oddsEvent({ id: "evX", commence_time: target.date + "T18:00:00Z", home_team: target.home + " FC", away_team: target.away });
-  ev.bookmakers[0].markets[0].outcomes[0].name = ev.home_team; ev.bookmakers[0].markets[0].outcomes[2].name = ev.away_team;
-  ev.bookmakers = [ev.bookmakers[0]];
+  for (const b of ev.bookmakers) { b.markets[0].outcomes[0].name = ev.home_team; b.markets[0].outcomes[2].name = ev.away_team; }
+  ev.bookmakers = [ev.bookmakers[0], ev.bookmakers[2]];
   E.mergeOddsApi(r, "FL1", [ev], "2026-10-16T08:00:00Z");
   const M2 = FQ.buildMatches(E.build(r), "2026-10-16");
   const got = M2.find((m) => m.id === target.id);
   assert.ok(got.oddsFr, "relevé rattaché");
   assert.equal(got.oddsFr.books.winamax_fr[0], 2.05);
   assert.equal(M2.filter((m) => m.oddsFr && m.oddsFr.eventId === "evX").length, 1, "rattaché à un seul match");
+  // référence sharp (Pinnacle) relevée dans le même appel : rattachée au match et utilisée comme cote juste
+  assert.deepEqual(got.oddsSharp.books.pinnacle.slice(0, 3), [2.2, 3.5, 3.6]);
+  const po = FQ.P.probOdds(got);
+  assert.deepEqual(po.t, [2.2, 3.5, 3.6]); assert.match(po.src, /Pinnacle/);
+});
+
+test("The Odds API : un seul appel pour les bookmakers français et les références (≤ 10 bookmakers = 1 crédit)", () => {
+  const u = new URL(E.oddsApiUrl("FL1", "k"));
+  const books = u.searchParams.get("bookmakers").split(",");
+  assert.ok(books.length <= 10 && books.includes("pinnacle") && books.includes("winamax_fr"));
+  assert.equal(u.searchParams.get("regions"), null);
+  const r = raw();
+  E.mergeOddsApi(r, "FL1", [oddsEvent()], "2026-10-16T09:00:00Z");
+  const later = oddsEvent(); later.bookmakers[2].markets[0].outcomes[0].price = 2.1;
+  E.mergeOddsApi(r, "FL1", [later], "2026-10-17T09:00:00Z");
+  assert.equal(r.oddsSharp.ev1[4].pinnacle[0], 2.1, "dernier relevé");
+  assert.equal(r.oddsSharp.ev1[6].pinnacle[0], 2.2, "premier relevé conservé");
 });
 
 test("reconstruction déterministe : identifiants uniques, aucune date invalide", () => {

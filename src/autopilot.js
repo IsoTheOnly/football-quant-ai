@@ -51,11 +51,27 @@
     return { asOf, model, pr, ch, ca, rel, missing, staleDays, stakeInfo };
   }
 
+  /** Cote de référence sharp d'un match (Pinnacle de préférence, sinon une bourse), relevée avant le coup d'envoi */
+  const SHARP_ORDER = ["pinnacle", "betfair_ex_eu", "matchbook"];
+  function sharpRef(match, which) {
+    const sh = match && match.oddsSharp;
+    if (!sh) return null;
+    const books = which === "first" ? sh.first : sh.books, at = which === "first" ? sh.firstAt : sh.at;
+    if (!books) return null;
+    for (const k of SHARP_ORDER) {
+      const b = books[k];
+      if (b && b[0] > 1 && b[1] > 1 && b[2] > 1) return { t: [b[0], b[1], b[2]], book: k, at, src: `${(FQ.ETL && FQ.ETL.SHARP_BOOKS && FQ.ETL.SHARP_BOOKS[k]) || k} (référence, The Odds API)` };
+    }
+    return null;
+  }
   /**
    * Cotes servant à estimer les probabilités (pas à parier) : les plus précises disponibles.
    * Bet 365 (marge faible) quand il existe, sinon la médiane des bookmakers français.
    */
   function probOdds(match) {
+    // 1. référence sharp (Pinnacle, sinon bourse) : la cote la plus juste du marché
+    const sh = sharpRef(match);
+    if (sh) return { t: sh.t, src: sh.src };
     const o = match && match.odds;
     if (o && o.h && o.d && o.a) return { t: [o.h, o.d, o.a], src: o.src };
     const fr = match && match.oddsFr;
@@ -91,6 +107,7 @@
       matchOdds: match.odds || null,
     };
     pred.pick = pickFor(ctx, match, mk, b.rel.score, oddsMap);
+    if (pred.pick) pred.pick.refSrc = pred.blend ? pred.blend.src : null; // d'où vient la cote juste (Pinnacle, Bet 365, médiane FR)
     const sel = [
       ["1N2", "1", mk.p1], ["1N2", "N", mk.pN], ["1N2", "2", mk.p2], ["BTTS", "Oui", mk.bttsYes], ["BTTS", "Non", mk.bttsNo],
     ].map(([market, selection, p]) => ({ market, selection, p, rel: b.rel.score }));
@@ -222,6 +239,12 @@
     const cr = match.closeRef;
     if (cr && cr.h && cr.d && cr.a) { const t = [cr.h, cr.d, cr.a]; return { odds: t[i], pFair: fair(t), src: cr.src, final: true }; }
     if (!kickoffPassed(match, nowMs || Date.now())) return null;
+    // clôture approchée : dernier relevé Pinnacle (ou bourse) avant le coup d'envoi ; définitive quand football-data publie la clôture
+    const sr = sharpRef(match);
+    if (sr && match.oddsSharp.ko && Date.parse(sr.at) < Date.parse(match.oddsSharp.ko)) {
+      const p = FQ.marketProbs(sr.t, "power"), hrs = Math.max(0, Math.round((Date.parse(match.oddsSharp.ko) - Date.parse(sr.at)) / 3600e3));
+      return { odds: sr.t[i], pFair: p[i], src: `dernier relevé ${(FQ.ETL.SHARP_BOOKS || {})[sr.book] || sr.book} avant le match (${hrs} h avant)`, final: false };
+    }
     const fr = match.oddsFr;
     if (fr && fr.books && Object.keys(fr.books).length) {
       const names = FR_NAMES(), pref = (set && set.oddsBook) || "winamax_fr";
@@ -1038,6 +1061,22 @@
     return added;
   }
 
+  /* ----------------------------------------------- value bets contre la référence sharp */
+  /**
+   * Bilan des choix « value bet » (cote française au-dessus de la cote juste de la référence + seuil) :
+   * nombre, résultat, rendement avec IC bootstrap, et espérance à la clôture (CLV) — le signal le plus rapide d'un vrai avantage.
+   */
+  function valueSummary(s) {
+    const v = (s.picks || []).filter((p) => p.kind === "value" && p.odds > 1);
+    const done = v.filter((p) => p.status === "GAGNÉ" || p.status === "PERDU");
+    const pl = done.map((p) => (p.status === "GAGNÉ" ? p.odds - 1 : -1));
+    const clv = v.map((p) => p.clv && p.clv.ev).filter(U.isNum);
+    const sharp = v.filter((p) => /Pinnacle|bourse/.test((p.why || "") + " " + (p.refSrc || ""))).length;
+    return { n: v.length, open: v.filter((p) => p.status === "EN ATTENTE").length, done: done.length, won: done.filter((p) => p.status === "GAGNÉ").length,
+      roi: pl.length ? pl.reduce((a, x) => a + x, 0) / pl.length : null, roiCI: FQ.T && FQ.T.bootRoi && pl.length >= 5 ? FQ.T.bootRoi(pl, 600) : null,
+      clvN: clv.length, clv: clv.length ? clv.reduce((a, x) => a + x, 0) / clv.length : null, clvPos: clv.filter((x) => x > 0).length, clvCI: FQ.T && FQ.T.bootRoi && clv.length >= 5 ? FQ.T.bootRoi(clv, 600) : null, sharp };
+  }
+
   /* ----------------------------------------------- journal des prévisions (jamais réécrit) */
   /**
    * Un instantané par match et par horizon (J-14, J-7, J-3, J-1, J-0), pris la première fois que le match entre dans l'horizon,
@@ -1292,6 +1331,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+  FQ.P = { valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
     SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

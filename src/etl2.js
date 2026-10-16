@@ -412,8 +412,14 @@
     CL: "soccer_uefa_champs_league", J1: "soccer_japan_j_league", DED: "soccer_netherlands_eredivisie", BSA: "soccer_brazil_campeonato", ELC: "soccer_efl_champ",
     SSL: "soccer_switzerland_superleague", SPL: "soccer_saudi_arabia_pro_league", WC: "soccer_fifa_world_cup" };
   E.FR_BOOKS = { winamax_fr: "Winamax", betclic_fr: "Betclic", unibet_fr: "Unibet", pmu_fr: "PMU", netbet_fr: "NetBet" };
+  /**
+   * Références « sharp » (marges faibles, prix les plus justes) : servent à estimer la cote juste, jamais à parier.
+   * Demandées dans le même appel que les bookmakers français (paramètre bookmakers : jusqu'à 10 bookmakers = 1 crédit).
+   */
+  E.SHARP_BOOKS = { pinnacle: "Pinnacle", betfair_ex_eu: "Betfair (bourse)", matchbook: "Matchbook (bourse)" };
+  const plausibleSharp = (h, d, a) => [h, d, a].every((x) => Number.isFinite(x) && x > 1.01 && x < 1000) && 1 / h + 1 / d + 1 / a > 0.97 && 1 / h + 1 / d + 1 / a < 1.1;
   /** Adresse d'un relevé 1N2 chez les bookmakers français (1 crédit par appel) */
-  E.oddsApiUrl = (comp, key) => `https://api.the-odds-api.com/v4/sports/${E.ODDS_API_SPORTS[comp]}/odds/?apiKey=${encodeURIComponent(key)}&regions=fr&markets=h2h&oddsFormat=decimal&dateFormat=iso`;
+  E.oddsApiUrl = (comp, key) => `https://api.the-odds-api.com/v4/sports/${E.ODDS_API_SPORTS[comp]}/odds/?apiKey=${encodeURIComponent(key)}&bookmakers=${Object.keys(E.FR_BOOKS).concat(Object.keys(E.SHARP_BOOKS)).join(",")}&markets=h2h&oddsFormat=decimal&dateFormat=iso`;
   /** Une cote 1N2 plausible : trois cotes > 1, marge du bookmaker entre 0 et 25 % */
   E.plausibleTriple = function (h, d, a) {
     if (![h, d, a].every((x) => Number.isFinite(x) && x > 1.01 && x < 1000)) return false;
@@ -432,14 +438,21 @@
     for (const ev of events || []) {
       if (!ev || !ev.id || !ev.home_team || !ev.away_team || !ev.commence_time) continue;
       if (!(Date.parse(ev.commence_time) > t)) { live++; continue; }
-      const books = {};
+      const books = {}, sharp = {};
       for (const b of ev.bookmakers || []) {
-        if (!E.FR_BOOKS[b.key]) continue;
+        const isFr = !!E.FR_BOOKS[b.key], isSharp = !!E.SHARP_BOOKS[b.key];
+        if (!isFr && !isSharp) continue;
         const mk = (b.markets || []).find((x) => x.key === "h2h"); if (!mk) continue;
         const price = (name) => { const x = (mk.outcomes || []).find((y) => y.name === name); return x ? +x.price : NaN; };
         const h = price(ev.home_team), d = price("Draw"), a = price(ev.away_team);
-        if (!E.plausibleTriple(h, d, a)) { rejected++; continue; }
-        books[b.key] = [h, d, a, b.last_update || mk.last_update || null];
+        if (isFr ? !E.plausibleTriple(h, d, a) : !plausibleSharp(h, d, a)) { rejected++; continue; }
+        (isFr ? books : sharp)[b.key] = [h, d, a, b.last_update || mk.last_update || null];
+      }
+      if (Object.keys(sharp).length) {
+        // référence sharp : premier relevé gardé (ouverture) et dernier relevé avant le coup d'envoi (clôture approchée)
+        raw.oddsSharp = raw.oddsSharp || {};
+        const ps = raw.oddsSharp[ev.id];
+        raw.oddsSharp[ev.id] = [comp, ev.commence_time, ev.home_team, ev.away_team, sharp, fetchedAt, (ps && ps[6]) || sharp, (ps && ps[7]) || fetchedAt];
       }
       if (!Object.keys(books).length) continue;
       const prev = raw.oddsFr[ev.id];
@@ -448,6 +461,7 @@
     }
     const lim = new Date(t - 400 * 864e5).toISOString();
     for (const [id, o] of Object.entries(raw.oddsFr)) if (o[1] < lim) delete raw.oddsFr[id];
+    for (const [id, o] of Object.entries(raw.oddsSharp || {})) if (o[1] < lim) delete raw.oddsSharp[id];
     return { kept, live, rejected };
   };
   /** Marchés complémentaires d'un match (1 crédit par marché renvoyé) : les deux équipes marquent, plus/moins de buts */
@@ -496,6 +510,8 @@
       }
       if (!best || bs < 1.2) { unjoined++; continue; }
       best.row[9].oddsFr = { books, at, first, ko, eventId: id };
+      const sh = raw.oddsSharp && raw.oddsSharp[id];
+      if (sh) best.row[9].oddsSharp = { books: sh[4], at: sh[5], first: sh[6], firstAt: sh[7], ko };
       const x = raw.oddsFrX && raw.oddsFrX[id];
       if (x) best.row[9].oddsFrX = { btts: x.btts, totals: x.totals, at: x.at };
       joined++;

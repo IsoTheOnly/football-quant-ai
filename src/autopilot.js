@@ -54,6 +54,19 @@
       if (xo.btts) { gm.btts = two(xo.btts.y, xo.btts.n); gm.bttsModel = mk2.bttsYes; mk2.bttsYes = bg.w * mk2.bttsYes + (1 - bg.w) * gm.btts; mk2.bttsNo = 1 - mk2.bttsYes; }
       pr.markets = mk2; pr.goalsBlend = Object.assign({ w: bg.w }, gm);
     }
+    // absences (API-Football) : part des buts de l'équipe marqués par les joueurs absents ; petit décalage validé hors échantillon
+    if (pr.ok && match.injuries && !opts.noBlend) {
+      const ii = injuryImpact(ctx, match);
+      if (ii) {
+        pr.injuryInfo = ii;
+        const x = INJ_COEF * (ii.impA - ii.impH);
+        if (x !== 0 && ctx.mode !== "demo") {
+          const before = pr.markets.p1, v = [pr.markets.p1 * Math.exp(x), pr.markets.pN, pr.markets.p2 * Math.exp(-x)], t = v[0] + v[1] + v[2];
+          pr.markets = Object.assign({}, pr.markets, { p1: v[0] / t, pN: v[1] / t, p2: v[2] / t });
+          ii.shift = Math.round(1000 * (v[0] / t - before)) / 1000;
+        }
+      }
+    }
     const ch = FQ.teamContext(ctx.matches, match.comp, match.home, match.date, ctx.today);
     const ca = FQ.teamContext(ctx.matches, match.comp, match.away, match.date, ctx.today);
     const lastComp = ctx.matches.filter((m) => m.comp === match.comp && m.hg !== null && m.date < asOf).map((m) => m.date).sort().slice(-1)[0];
@@ -75,6 +88,28 @@
       if (b && b[0] > 1 && b[1] > 1 && b[2] > 1) return { t: [b[0], b[1], b[2]], book: k, at, src: `${(FQ.ETL && FQ.ETL.SHARP_BOOKS && FQ.ETL.SHARP_BOOKS[k]) || k} (référence, The Odds API)` };
     }
     return null;
+  }
+  /**
+   * Coefficient des absences : appris sur 2024-25 (août → janvier), validé sur février → mai 2025 face aux cotes d'avant-match
+   * (écart de log loss −0,0003, IC 95 % −0,0006 à −0,0002 ; tools/blessures.js). Effet volontairement petit : un buteur
+   * qui marque 40 % des buts de son équipe absent déplace la probabilité de victoire d'environ un point.
+   */
+  const INJ_COEF = 0.05;
+  const lastName = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z ]+/g, " ").trim().split(/\s+/).slice(-1)[0] || "";
+  function injuryImpact(ctx, match) {
+    const inj = match.injuries; if (!inj) return null;
+    const side = (team, list) => {
+      const sc = FQ.teamScorers(ctx.matches, match.comp, team, match.date);
+      const by = {}; for (const x of sc.list || []) by[lastName(x.name)] = (by[lastName(x.name)] || 0) + x.goals;
+      let imp = 0; const out = [], q = [];
+      for (const [name, type, reason] of list || []) {
+        const sh = sc.teamGoals ? (by[lastName(name)] || 0) / sc.teamGoals : 0;
+        if (type === "Missing Fixture") { imp += sh; out.push({ name, reason, share: Math.round(sh * 100) / 100 }); } else q.push({ name, reason });
+      }
+      return { imp, out, q };
+    };
+    const h = side(match.home, inj.home), a = side(match.away, inj.away);
+    return { at: inj.at, impH: Math.round(h.imp * 1000) / 1000, impA: Math.round(a.imp * 1000) / 1000, home: h.out, away: a.out, homeQ: h.q, awayQ: a.q };
   }
   /**
    * Cotes servant à estimer les probabilités (pas à parier) : les plus précises disponibles.
@@ -115,7 +150,7 @@
       dataVersion: ctx.dataVersion ? ctx.dataVersion(match.comp) : null,
       origin: opts.origin || "manuel",
       stakeEffect: b.stakeInfo || null,
-      blend: b.pr.blendInfo || null, modelMarkets: b.pr.modelMarkets || null, driverInfo: b.pr.driverInfo || null,
+      blend: b.pr.blendInfo || null, modelMarkets: b.pr.modelMarkets || null, driverInfo: b.pr.driverInfo || null, injuryInfo: b.pr.injuryInfo || null,
       matchOdds: match.odds || null,
     };
     pred.pick = pickFor(ctx, match, mk, b.rel.score, oddsMap);
@@ -343,8 +378,9 @@
       if (saved && saved.length) { saved.forEach((p) => out.push(Object.assign({ team, side }, p))); continue; }
       if (ctx.mode === "real") {
         const sc = FQ.teamScorers(ctx.matches, match.comp, team, match.date);
-        sc.list.slice(0, 3).forEach((x) => out.push({ team, side, name: x.name, shareGoals: Math.round(((x.goals + 0.5) / (sc.teamGoals + 2)) * 1000) / 1000, shareAssists: null, pPlay: null, minutes: null, sharesFromData: true,
-          note: `${x.goals} but(s) sur ${sc.teamGoals} de l'équipe (${sc.matchesWithData} matchs avec buteurs, openfootball)` }));
+        const absent = new Set(((match.injuries && match.injuries[side === "H" ? "home" : "away"]) || []).filter((x) => x[1] === "Missing Fixture").map((x) => lastName(x[0])));
+        sc.list.slice(0, 3).forEach((x) => { const out0 = absent.has(lastName(x.name)); out.push({ team, side, name: x.name, shareGoals: Math.round(((x.goals + 0.5) / (sc.teamGoals + 2)) * 1000) / 1000, shareAssists: null, pPlay: out0 ? 0 : null, minutes: out0 ? 0 : null, sharesFromData: true,
+          note: `${x.goals} but(s) sur ${sc.teamGoals} de l'équipe (${sc.matchesWithData} matchs avec buteurs)${out0 ? " · absent (API-Football)" : ""}` }); });
       }
     }
     return out;
@@ -715,6 +751,7 @@
     if (st && st.home && st.away) ctx.push(`${m.home} ${st.home.pos}e (${st.home.pts} pts), ${m.away} ${st.away.pos}e (${st.away.pts} pts)`);
     if (f.h || f.a) ctx.push(`forme récente ${f.h || "—"} contre ${f.a || "—"}`);
     if (U.isNum(pr.lambdaHome)) ctx.push(`buts attendus ${f2(pr.lambdaHome, 1)} – ${f2(pr.lambdaAway, 1)}`);
+    if (pr.injuryInfo) { const ab = (l) => (l || []).map((x) => x.name + (x.share >= 0.1 ? ` (${Math.round(100 * x.share)} % des buts)` : "")).join(", "); const h = ab(pr.injuryInfo.home), a = ab(pr.injuryInfo.away); if (h || a) ctx.push(`absents : ${m.home} ${h || "aucun"} ; ${m.away} ${a || "aucun"}`); }
     if (ctx.length) out.push("Contexte : " + ctx.join(" ; ") + ".");
     return out.join(" ");
   }
@@ -1343,6 +1380,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+  FQ.P = { injuryImpact, INJ_COEF, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
     SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

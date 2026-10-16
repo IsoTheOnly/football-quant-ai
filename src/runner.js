@@ -33,7 +33,8 @@ const gzip = (txt) => zlib.gzipSync(Buffer.from(txt, "utf8"), { level: 9 }).toSt
 const meta = readDoc("meta");
 const notes = [];
 const ODDS_KEY = (process.env.ODDS_API_KEY || "").trim();
-const hide = (t) => (ODDS_KEY ? String(t).split(ODDS_KEY).join("***") : String(t));
+const AF_KEY = (process.env.APIFOOTBALL_KEY || "").trim(); // API-Football (offre gratuite) : absences ; jamais écrite dans un fichier ni un journal
+const hide = (t) => { let x = String(t); for (const k of [ODDS_KEY, AF_KEY]) if (k) x = x.split(k).join("***"); return x; };
 
 function readChunks(ids, len) {
   if (!Array.isArray(ids)) return null;
@@ -92,10 +93,11 @@ raw.oddsFr = raw.oddsFr || {}; raw.feeds = raw.feeds || {};
 const tmp = path.join(dir, "dl"); fs.mkdirSync(tmp, { recursive: true });
 let dlN = 0;
 /** GET via curl (respecte le proxy de l'environnement). Retourne { ok, status, headers, body, err } ; jamais d'exception. */
-function get(url, binaryOk) {
+function get(url, binaryOk, reqHeaders) {
   const n = ++dlN, out = path.join(tmp, `b${n}`), hdr = path.join(tmp, `h${n}`);
   try {
-    cp.execFileSync("curl", ["-sS", "-L", "--compressed", "--max-time", "45", "--retry", "1", "-A", "Mozilla/5.0 (FootballQuantAI personal use)", "-D", hdr, "-o", out, "-w", "%{http_code}", url], { stdio: ["ignore", "pipe", "pipe"] });
+    const hArgs = []; for (const [k, v] of Object.entries(reqHeaders || {})) hArgs.push("-H", `${k}: ${v}`);
+    cp.execFileSync("curl", ["-sS", "-L", "--compressed", "--max-time", "45", "--retry", "1", "-A", "Mozilla/5.0 (FootballQuantAI personal use)", ...hArgs, "-D", hdr, "-o", out, "-w", "%{http_code}", url], { stdio: ["ignore", "pipe", "pipe"] });
   } catch (e) {
     return { ok: false, status: 0, err: hide((e.stderr && e.stderr.toString().trim()) || e.message).slice(0, 200) };
   }
@@ -220,6 +222,18 @@ else if (ODDS_KEY) {
   }
   raw.feeds.oddsFrFeed = { fetchedAt, source: "The Odds API (bookmakers français)" };
 } else notes.push("ODDS_API_KEY absent : cotes Bet 365 seulement");
+// 4. absences (API-Football, offre gratuite : 100 requêtes par jour, dates de la veille au lendemain seulement) : aujourd'hui et demain, 2 requêtes par passage
+if (AF_KEY && !process.argv.includes("--no-injuries")) {
+  net.injuries = { tried: 0, ok: 0, fixtures: 0 };
+  for (let i = 0; i < 2; i++) {
+    const d = U.addDays(today, i);
+    net.injuries.tried++;
+    const r = get(E.afInjuriesUrl(d), false, { "x-apisports-key": AF_KEY });
+    if (!r.ok) continue;
+    try { const j = JSON.parse(r.body); if (j.errors && Object.keys(j.errors).length) { notes.push("API-Football : " + hide(JSON.stringify(j.errors)).slice(0, 160)); continue; } net.injuries.ok++; net.injuries.fixtures += E.mergeInjuries(raw, j, fetchedAt); } catch (e) {}
+  }
+  raw.feeds.injuries = { fetchedAt, source: "API-Football (blessés et suspendus)" };
+} else if (!AF_KEY) notes.push("APIFOOTBALL_KEY absent : absences non relevées");
 fs.rmSync(tmp, { recursive: true, force: true });
 
 /* ------------------------------------------------------------------ reconstruction, entraînement, cycle */

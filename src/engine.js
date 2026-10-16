@@ -97,7 +97,7 @@
             neutral: x.neutral !== undefined ? !!x.neutral : c.code === "WC" ? !/Mexico|Canada|United States|USA/.test(home) : false,
             regular: x.reg !== undefined ? !!x.reg : undefined,
             odds: x.odds || (x.oddsIsClose && x.close ? Object.assign({}, x.close, { src: x.close.src + " — utilisée faute de cote d'avant-match" }) : null),
-            close: x.close || null, closeRef: x.closeRef || null, oddsFr: x.oddsFr || null, oddsFrX: x.oddsFrX || null, oddsSharp: x.oddsSharp || null, sot: x.sot || null, oddsIsClose: x.oddsIsClose || 0, ou25: x.ou25 || null, xg: x.xg || null, aet: x.aet || null, ft: x.ft || null, eid: x.eid || null,
+            close: x.close || null, closeRef: x.closeRef || null, oddsFr: x.oddsFr || null, oddsFrX: x.oddsFrX || null, oddsSharp: x.oddsSharp || null, sot: x.sot || null, injuries: x.injuries || null, oddsIsClose: x.oddsIsClose || 0, ou25: x.ou25 || null, xg: x.xg || null, aet: x.aet || null, ft: x.ft || null, eid: x.eid || null,
             source: src, sourceFile: s.file, sourceCommitDate: s.commitDate,
             webCheck: web,
           });

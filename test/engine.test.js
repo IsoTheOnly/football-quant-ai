@@ -70,3 +70,7 @@ test("drivers : forces des tirs cadrés et des cotes passées, sans fuite tempor
   const c = FQ.combineLambdas(1, 2, { odds: [2, 1] }, { goals: 0.5, sot: 0.5, odds: 0.5 });
   assert.ok(Math.abs(c[0] - Math.sqrt(2)) < 1e-9, "famille absente : poids renormalisés");
 });
+
+test("l'exécuteur de la tâche planifiée se compile", () => {
+  require("child_process").execFileSync(process.execPath, ["--check", require("path").join(__dirname, "..", "src", "runner.js")]);
+});

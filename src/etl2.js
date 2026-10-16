@@ -273,6 +273,7 @@
     const sslAlias = {};
     const ssl = buildSwiss(raw, sslAlias);
     const fr = E.joinOddsFr(raw, Object.assign({}, matchesByComp, { SSL: ssl }));
+    E.joinInjuries(raw, Object.assign({}, matchesByComp, { SSL: ssl }));
     const competitions = E.COMPS.map(([code, name, country, tz]) => {
       const list = code === "SSL" ? ssl : matchesByComp[code] || [];
       const bySeason = {};
@@ -500,6 +501,49 @@
   };
 
   /** Rattache chaque relevé français à sa rencontre : même compétition, date ±1 jour, noms d'équipes les plus proches. */
+  /* ------------------------------------------------------------ absences (API-Football, offre gratuite) */
+  /** Identifiants API-Football des 13 compétitions */
+  E.AF_LEAGUES = { PL: 39, ELC: 40, PD: 140, SA: 135, BL1: 78, FL1: 61, DED: 88, BSA: 71, J1: 98, SSL: 207, SPL: 307, CL: 2, WC: 1 };
+  /** Blessés et suspendus de toutes les compétitions pour une date (1 requête ; l'offre gratuite donne la saison en cours par date) */
+  E.afInjuriesUrl = (date) => `https://v3.football.api-sports.io/injuries?date=${date}`;
+  /**
+   * Intègre une réponse /injuries : raw.injuries[fixtureId] = { comp, date, at, list: [[équipe, joueur, type, motif]] }.
+   * type : « Missing Fixture » (absent) ou « Questionable » (incertain). Dernier relevé gardé ; relevés de plus de 40 jours supprimés.
+   */
+  E.mergeInjuries = function (raw, json, fetchedAt) {
+    raw.injuries = raw.injuries || {};
+    const byLeague = {}; for (const [c, id] of Object.entries(E.AF_LEAGUES)) byLeague[id] = c;
+    const fx = {};
+    for (const x of (json && json.response) || []) {
+      const comp = x && x.league && byLeague[x.league.id]; if (!comp || !x.fixture || !x.team || !x.player) continue;
+      const f = (fx[x.fixture.id] = fx[x.fixture.id] || { comp, date: x.fixture.date, at: fetchedAt, list: [] });
+      f.list.push([x.team.name, x.player.name, x.player.type, x.player.reason]);
+    }
+    for (const [id, f] of Object.entries(fx)) raw.injuries[id] = f;
+    const lim = new Date(Date.parse(fetchedAt) - 40 * 864e5).toISOString();
+    for (const [id, f] of Object.entries(raw.injuries)) if (f.date < lim) delete raw.injuries[id];
+    return Object.keys(fx).length;
+  };
+  /** Rattache les absences aux matchs (même compétition, date à un jour près, noms d'équipes proches) : ex.injuries = { home, away, at } */
+  E.joinInjuries = function (raw, matchesByComp) {
+    let joined = 0;
+    for (const f of Object.values(raw.injuries || {})) {
+      const t = Date.parse(f.date), teams = [...new Set(f.list.map((x) => x[0]))];
+      let best = null, bs = 0;
+      for (const m of matchesByComp[f.comp] || []) {
+        if (Math.abs(Date.parse(m.row[1] + "T12:00:00Z") - t) > 1.5 * 864e5) continue;
+        const sc = Math.max(...teams.map((n) => Math.max(sim(n, m.row[4]), sim(n, m.row[5]))));
+        if (sc > bs) { bs = sc; best = m; }
+      }
+      if (!best || bs < 0.6) continue;
+      const home = [], away = [];
+      for (const x of f.list) (sim(x[0], best.row[4]) >= sim(x[0], best.row[5]) ? home : away).push([x[1], x[2], x[3]]);
+      best.row[9].injuries = { home, away, at: f.at };
+      joined++;
+    }
+    return joined;
+  };
+
   E.joinOddsFr = function (raw, matchesByComp) {
     let joined = 0, unjoined = 0;
     for (const [id, o] of Object.entries(raw.oddsFr || {})) {

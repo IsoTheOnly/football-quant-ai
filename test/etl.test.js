@@ -134,3 +134,18 @@ test("fichiers football-data de la saison en cours", () => {
   assert.ok(E.fdFilesFor("2027-03-01").includes("mmz4281/2627/E0.csv"));
   assert.ok(E.fdFilesFor("2027-08-01").includes("mmz4281/2728/E0.csv"));
 });
+
+test("API-Football : absences rattachées au bon match et au bon côté", () => {
+  const r = raw();
+  const M = FQ.buildMatches(E.build(r), "2026-10-16");
+  const target = M.find((m) => m.comp === "FL1" && m.status === "PROGRAMMÉ" && m.date >= "2026-10-16");
+  const json = { response: [
+    { player: { name: "J. Dupont", type: "Missing Fixture", reason: "Knee Injury" }, team: { name: target.home + " FC" }, fixture: { id: 99, date: target.date + "T15:00:00+00:00" }, league: { id: 61 } },
+    { player: { name: "A. Martin", type: "Questionable", reason: "Illness" }, team: { name: target.away }, fixture: { id: 99, date: target.date + "T15:00:00+00:00" }, league: { id: 61 } },
+    { player: { name: "X", type: "Missing Fixture", reason: "?" }, team: { name: "Auckland" }, fixture: { id: 5, date: target.date + "T04:00:00+00:00" }, league: { id: 188 } }] };
+  assert.equal(E.mergeInjuries(r, json, "2026-10-16T08:00:00Z"), 1, "seules nos 13 compétitions");
+  const got = FQ.buildMatches(E.build(r), "2026-10-16").find((m) => m.id === target.id);
+  assert.deepEqual(got.injuries.home[0], ["J. Dupont", "Missing Fixture", "Knee Injury"]);
+  assert.equal(got.injuries.away[0][0], "A. Martin");
+  assert.match(E.afInjuriesUrl("2026-10-17"), /injuries\?date=2026-10-17$/);
+});

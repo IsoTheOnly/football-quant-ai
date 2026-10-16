@@ -80,12 +80,95 @@
     return { pred, opps };
   }
 
+  /**
+   * Cote 1N2 de référence d'une rencontre, toujours relevée chez un bookmaker (jamais calculée) :
+   * 1. bookmaker français choisi dans les paramètres (The Odds API) ;
+   * 2. sinon médiane des bookmakers français relevés pour ce match ;
+   * 3. sinon Bet 365 (ESPN ou football-data.co.uk), quand aucune cote française n'est disponible (crédits épuisés, compétition non couverte).
+   * Un relevé français de plus de 72 h est écarté si une cote Bet 365 plus récente existe.
+   */
+  const FR_NAMES = () => (FQ.ETL && FQ.ETL.FR_BOOKS) || { winamax_fr: "Winamax", betclic_fr: "Betclic", unibet_fr: "Unibet", pmu_fr: "PMU", netbet_fr: "NetBet" };
+  const median = (xs) => { const v = xs.slice().sort((a, b) => a - b); const n = v.length; return n % 2 ? v[(n - 1) / 2] : (v[n / 2 - 1] + v[n / 2]) / 2; };
+  function refOdds(match, set) {
+    const fr = match && match.oddsFr, o = match && match.odds;
+    const at = (x) => (x && x.at ? Date.parse(x.at) : 0);
+    const frUsable = fr && fr.books && Object.keys(fr.books).length && !(o && o.h && at(o) > at(fr) && Date.now() - at(fr) > 72 * 3600e3);
+    if (frUsable) {
+      const names = FR_NAMES(), pref = (set && set.oddsBook) || "winamax_fr", stamp = ` · relevée le ${String(fr.at).slice(0, 16).replace("T", " ")} UTC`;
+      const b = fr.books[pref];
+      if (b) return { h: b[0], d: b[1], a: b[2], src: `${names[pref] || pref} (The Odds API)${stamp}`, at: fr.at, book: pref, fr: true };
+      const keys = Object.keys(fr.books);
+      const pick = (i) => Math.round(median(keys.map((k) => fr.books[k][i])) * 100) / 100;
+      return { h: pick(0), d: pick(1), a: pick(2), src: `médiane de ${keys.map((k) => names[k] || k).join(", ")} (The Odds API ; ${names[pref] || pref} absent)${stamp}`, at: fr.at, book: "median_fr", fr: true };
+    }
+    if (o && o.h) return Object.assign({}, o, { src: o.src + (o.at ? ` · relevée le ${String(o.at).slice(0, 16).replace("T", " ")} UTC` : "") + " · aucune cote française disponible", fr: false });
+    return null;
+  }
   /** Cotes 1N2 du match (source réelle) au format attendu par les opportunités */
-  function matchOddsMap(match) {
-    const o = match.odds;
-    if (!o || !o.h) return null;
-    const src = o.src + (o.at ? ` · relevée le ${o.at.slice(0, 16).replace("T", " ")} UTC` : "");
-    return { "1N2|1": { v: o.h, src }, "1N2|N": { v: o.d, src }, "1N2|2": { v: o.a, src } };
+  function matchOddsMap(match, set) {
+    const o = refOdds(match, set);
+    if (!o) return null;
+    return { "1N2|1": { v: o.h, src: o.src }, "1N2|N": { v: o.d, src: o.src }, "1N2|2": { v: o.a, src: o.src } };
+  }
+
+  /* ----------------------------------------------- mesure de la cote de clôture (CLV) */
+  /**
+   * Cote de clôture d'une sélection 1N2 :
+   * - définitive : Pinnacle (ou moyenne du marché) à la clôture, publiée par football-data.co.uk quelques jours après le match ;
+   * - provisoire : dernier relevé d'avant-match du même bookmaker français (ou de la médiane), quand le match a commencé.
+   * Retourne { odds, pFair, src, final } ou null. pFair = probabilité sans marge (normalisation des trois cotes).
+   */
+  function closingFor(match, market, sel, set, nowMs) {
+    if (!match || market !== "1N2") return null;
+    const i = { 1: 0, N: 1, 2: 2 }[sel];
+    if (i === undefined) return null;
+    const fair = (t) => { const inv = t.map((x) => 1 / x), s = inv[0] + inv[1] + inv[2]; return inv[i] / s; };
+    const cr = match.closeRef;
+    if (cr && cr.h && cr.d && cr.a) { const t = [cr.h, cr.d, cr.a]; return { odds: t[i], pFair: fair(t), src: cr.src, final: true }; }
+    if (!kickoffPassed(match, nowMs || Date.now())) return null;
+    const fr = match.oddsFr;
+    if (fr && fr.books && Object.keys(fr.books).length) {
+      const names = FR_NAMES(), pref = (set && set.oddsBook) || "winamax_fr";
+      const keys = fr.books[pref] ? [pref] : Object.keys(fr.books);
+      const t = [0, 1, 2].map((j) => median(keys.map((k) => fr.books[k][j])));
+      const ko = fr.ko ? Date.parse(fr.ko) : null, hrs = ko ? Math.max(0, Math.round((ko - Date.parse(fr.at)) / 3600e3)) : null;
+      return { odds: t[i], pFair: fair(t), src: `dernier relevé ${keys.length === 1 ? names[keys[0]] || keys[0] : "médiane FR"} avant le match${hrs !== null ? ` (${hrs} h avant)` : ""}`, final: false };
+    }
+    return null;
+  }
+  /** CLV d'une cote prise : écart brut à la clôture et espérance à la clôture (cote prise × probabilité sans marge − 1) */
+  function clvOf(taken, close) {
+    if (!close || !(taken > 1)) return null;
+    return { close: Math.round(close.odds * 100) / 100, src: close.src, final: !!close.final, pct: taken / close.odds - 1, ev: taken * close.pFair - 1 };
+  }
+  /** Met à jour la CLV des choix, des tickets fictifs et des paris réels ; une mesure provisoire est remplacée par la définitive dès qu'elle paraît. */
+  function updateClv(ctx) {
+    const s = ctx.state, set = s.settings, nowMs = Date.now();
+    const mById = (id) => (ctx.matchById ? ctx.matchById.get(id) : ctx.matches.find((x) => x.id === id));
+    let changed = 0;
+    const need = (x) => !x.clv || !x.clv.final;
+    for (const p of s.picks || []) {
+      if (!(p.odds > 1) || !need(p)) continue;
+      const c = clvOf(p.odds, closingFor(mById(p.matchId), p.market, p.sel, set, nowMs));
+      if (c && JSON.stringify(c) !== JSON.stringify(p.clv)) { p.clv = c; changed++; }
+    }
+    for (const t of (s.paperTickets || []).concat(s.realBets || [])) {
+      if (!t.legs || !t.legs.length || (t.clv && t.clv.final)) continue;
+      let all = true, prodFair = 1, prodClose = 1, final = true;
+      for (const l of t.legs) {
+        if (l.status === "ANNULÉ") continue;
+        const cl = closingFor(mById(l.matchId), l.market, l.sel, set, nowMs);
+        if (!cl) { all = false; continue; }
+        if (l.odds > 1) { const c = clvOf(l.odds, cl); if (JSON.stringify(c) !== JSON.stringify(l.clv)) { l.clv = c; changed++; } }
+        prodFair *= cl.pFair; prodClose *= cl.odds; final = final && cl.final;
+      }
+      if (all && t.totalOdds > 1 && t.legs.some((l) => l.status !== "ANNULÉ")) {
+        const odds = U.isNum(t.settledOdds) ? t.settledOdds : t.totalOdds;
+        const c = { close: Math.round(prodClose * 100) / 100, pct: odds / prodClose - 1, ev: odds * prodFair - 1, final, src: final ? "clôture football-data.co.uk" : "derniers relevés avant les matchs" };
+        if (JSON.stringify(c) !== JSON.stringify(t.clv)) { t.clv = c; changed++; }
+      }
+    }
+    return changed;
   }
   function effSettings(ctx) {
     const s = Object.assign({}, ctx.state.settings);
@@ -173,7 +256,7 @@
         continue;
       }
       const players = defaultPlayersFor(ctx, m).map((p) => computePlayer(ctx, m, b, p)).filter((p) => !p.incomplete);
-      const snap = makeSnapshot(ctx, m, b, { origin: o.origin || "manuel" }, players, ctx.mode === "demo" ? demoOddsMap(ctx, m, players) : matchOddsMap(m));
+      const snap = makeSnapshot(ctx, m, b, { origin: o.origin || "manuel" }, players, ctx.mode === "demo" ? demoOddsMap(ctx, m, players) : matchOddsMap(m, ctx.state.settings));
       s.opportunities.forEach((x) => { if (x.matchId === m.id && x.status === "ouverte") x.status = "remplacée"; });
       snap.opps.forEach((x) => { x.dataVersion = dv; x.origin = o.origin || "manuel"; });
       s.predictions.push(snap.pred); s.opportunities.push(...snap.opps);
@@ -280,7 +363,24 @@
         maxLegOdds: Math.max(sc.maxLegOdds, Math.min(15, Math.sqrt(hi) + 0.5)), maxLegs: hi > 80 ? 12 : sc.maxLegs });
     });
   }
-  const legWon = (market, sel, hg, ag) => market === "1N2" ? (hg > ag ? "1" : hg === ag ? "N" : "2") === sel : market === "BTTS" ? (sel === "Oui") === (hg > 0 && ag > 0) : null;
+  /**
+   * Résultat d'une sélection à partir du score (temps réglementaire) : true gagné, false perdu, null non vérifiable automatiquement.
+   * Marchés : 1N2 (1, N, 2), DC double chance (1N, 12, N2), BTTS (Oui, Non), Buts (+0.5 … -4.5), Buteur (nom du joueur, buteurs connus).
+   */
+  function legWon(market, sel, hg, ag, goals) {
+    if (market === "1N2") return (hg > ag ? "1" : hg === ag ? "N" : "2") === sel;
+    if (market === "DC") { const r = hg > ag ? "1" : hg === ag ? "N" : "2"; return ["1N", "12", "N2"].includes(sel) ? sel.includes(r) : null; }
+    if (market === "BTTS") return (sel === "Oui") === (hg > 0 && ag > 0);
+    if (market === "Buts") { const m = /^([+-])(\d+(?:\.5))$/.exec(sel || ""); if (!m) return null; const n = hg + ag, line = +m[2]; return m[1] === "+" ? n > line : n < line; }
+    if (market === "Buteur") {
+      if (!Array.isArray(goals)) return null;
+      const norm = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]+/g, " ").trim();
+      const want = norm(sel), last = want.split(" ").slice(-1)[0];
+      const scored = goals.some((g) => g[3] !== "og" && (norm(g[1]) === want || (last.length > 3 && norm(g[1]).split(" ").slice(-1)[0] === last)));
+      return scored ? true : null; // non buteur : participation inconnue (remboursé s'il n'a pas joué) → vérification manuelle
+    }
+    return null;
+  }
 
   /**
    * Meilleur ticket d'un scénario : au plus une sélection par match, cote totale dans [lo, hi],
@@ -334,7 +434,7 @@
       if (m.status !== "PROGRAMMÉ" || m.date < start || m.date > end || kickoffPassed(m, nowMs)) continue;
       const pr = lastPred.get(m.id); if (!pr || !pr.markets) continue;
       if ((pr.reliability || 0) < (set.relMin || 55)) continue;
-      const om = ctx.mode === "demo" ? demoOddsMap(ctx, m, []) : matchOddsMap(m);
+      const om = ctx.mode === "demo" ? demoOddsMap(ctx, m, []) : matchOddsMap(m, set);
       if (!om) continue;
       const mk = pr.markets, mm = pr.modelMarkets || null;
       const mkt = om["1N2|1"] && om["1N2|N"] && om["1N2|2"] ? FQ.marketProbs([om["1N2|1"].v, om["1N2|N"].v, om["1N2|2"].v]) : null;
@@ -358,14 +458,16 @@
   }
   function settleTicketLegs(ctx, t) {
     for (const l of t.legs) {
-      if (l.status !== "EN ATTENTE") continue;
+      if (l.status !== "EN ATTENTE" && !(l.status === "À VÉRIFIER" && l.market === "Buteur")) continue;
       const m = ctx.matchById ? ctx.matchById.get(l.matchId) : ctx.matches.find((x) => x.id === l.matchId);
       const r = ctx.state.results[l.matchId];
       if ((m && (m.status === "REPORTÉ" || m.status === "ANNULÉ")) || (r && (r.status === "REPORTÉ" || r.status === "ANNULÉ"))) { l.status = "ANNULÉ"; continue; }
       const hg = r && U.isNum(r.hg) ? r.hg : m ? m.hg : null, ag = r && U.isNum(r.ag) ? r.ag : m ? m.ag : null;
       if (!U.isNum(hg) || !U.isNum(ag) || !l.market) continue;
-      const w = legWon(l.market, l.sel, hg, ag); if (w === null) continue;
-      l.status = w ? "GAGNÉ" : "PERDU"; l.score = `${hg}-${ag}`;
+      const w = legWon(l.market, l.sel, hg, ag, m ? m.goals : null);
+      l.score = `${hg}-${ag}`;
+      if (w === null) { l.status = "À VÉRIFIER"; continue; }
+      l.status = w ? "GAGNÉ" : "PERDU";
     }
   }
   /** Règle un ticket (fictif ou réel) : une jambe perdue suffit ; jambe annulée = cote 1 */
@@ -373,6 +475,7 @@
     settleTicketLegs(ctx, t);
     if (t.manualStatus) { t.status = t.manualStatus; }
     else if (t.legs.some((l) => l.status === "PERDU")) t.status = "PERDU";
+    else if (t.legs.length && t.legs.every((l) => l.status !== "EN ATTENTE") && t.legs.some((l) => l.status === "À VÉRIFIER")) { if (t.status === "À VÉRIFIER") return false; t.status = "À VÉRIFIER"; t.profit = 0; return true; }
     else if (t.legs.length && t.legs.every((l) => l.status !== "EN ATTENTE")) {
       const live = t.legs.filter((l) => l.status === "GAGNÉ");
       if (!live.length) t.status = "ANNULÉ";
@@ -395,7 +498,7 @@
   function updateTickets(ctx, rep) {
     const s = ctx.state, now = new Date().toISOString(), nowMs = Date.now();
     s.paperTickets = s.paperTickets || []; s.realBets = s.realBets || [];
-    for (const t of s.paperTickets.concat(s.realBets)) if (t.status === "EN ATTENTE" && settleTicket(ctx, t, now) && rep) rep.ticketsSettled = (rep.ticketsSettled || 0) + 1;
+    for (const t of s.paperTickets.concat(s.realBets)) if ((t.status === "EN ATTENTE" || (t.status === "À VÉRIFIER" && !t.manualStatus)) && settleTicket(ctx, t, now) && rep) rep.ticketsSettled = (rep.ticketsSettled || 0) + 1;
     const started = (t) => t.legs.some((l) => { const m = ctx.matchById ? ctx.matchById.get(l.matchId) : null; return m ? kickoffPassed(m, nowMs) : l.date < ctx.today; });
     for (const t of s.paperTickets) if (t.status === "EN ATTENTE" && !t.frozen && started(t)) { t.frozen = true; t.frozenAt = now; }
     if (s.settings.paperTickets === false) return;
@@ -512,6 +615,7 @@
     // 4 bis. tickets combinés (paper betting, 3 scénarios) et règlement des paris réels saisis
     const tkBefore = JSON.stringify((s.paperTickets || []).map((t) => [t.id, t.status, t.updatedAt, t.frozen]).concat((s.realBets || []).map((t) => [t.id, t.status])));
     updateTickets(ctx, rep);
+    rep.clv = updateClv(ctx);
     rep.ticketsChanged = tkBefore !== JSON.stringify((s.paperTickets || []).map((t) => [t.id, t.status, t.updatedAt, t.frozen]).concat((s.realBets || []).map((t) => [t.id, t.status])));
     // 5. apprentissage
     const resolvedPreds = s.predictions.filter((p) => s.results[p.matchId] && Number.isFinite(s.results[p.matchId].hg)).length;
@@ -526,7 +630,7 @@
     if (allowBets && !rows.length && open.length === 0 && s.opportunities.some((o) => o.status === "ouverte" && !Number.isFinite(o.odds) && !o.insufficient)) rep.notes.push("Aucune cote disponible : probabilités, cotes justes et cotes minimales publiées, aucun pari engagé.");
     rep.compacted = compactState(s, ctx.today);
     rep.ms = Date.now() - t0;
-    rep.changed = rep.audited + rep.analysed + rep.insufficient + rep.autoBets + rep.closed + rep.compacted > 0 || !!rep.calibration || rep.ticketsChanged;
+    rep.changed = rep.audited + rep.analysed + rep.insufficient + rep.autoBets + rep.closed + rep.compacted + (rep.clv || 0) > 0 || !!rep.calibration || rep.ticketsChanged;
     if (rep.changed) {
       s.autoLog = (s.autoLog || []).concat([rep]).slice(-80);
     }
@@ -539,5 +643,5 @@
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
   FQ.P = { buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
-    SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState };
+    SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv };
 })(typeof window !== "undefined" ? window : globalThis);

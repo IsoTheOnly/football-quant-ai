@@ -81,15 +81,17 @@
       const hg = r.FTHG !== undefined ? r.FTHG : r.HG, ag = r.FTAG !== undefined ? r.FTAG : r.AG;
       const pre = tri(r, "B365", "Avg", "PS", "Max");
       const close = tri(r, "B365C", "AvgC", "PSC", "MaxC");
+      // référence de clôture pour la mesure CLV : Pinnacle (marché le plus efficient), sinon moyenne du marché
+      const closeRef = tri(r, "PSC", "AvgC");
       const xg = num(r.HxG) !== null || r.HxG === "0" ? [parseFloat(r.HxG), parseFloat(r.AxG)] : null;
-      out.push([div, date, r.Time || "", home, away, hg === "" || hg === undefined ? null : +hg, ag === "" || ag === undefined ? null : +ag, pre, close, xg, r.Season || null]);
+      out.push([div, date, r.Time || "", home, away, hg === "" || hg === undefined ? null : +hg, ag === "" || ag === undefined ? null : +ag, pre, close, xg, r.Season || null, closeRef]);
     }
     return out;
   }
   E.compactFD = compactFD;
 
   /* ------------------------------------------------------------ magasin brut */
-  E.emptyRaw = () => ({ v: 2, espn: {}, fd: {}, oddsEspn: {}, ofssl: [], feeds: {} });
+  E.emptyRaw = () => ({ v: 2, espn: {}, fd: {}, oddsEspn: {}, oddsFr: {}, ofssl: [], feeds: {} });
   /** Fusionne de nouvelles lignes ESPN (format [id, isoDate, home, away, hs, as, st, neutral, slug, goals, hid, aid, odds, note]) */
   E.mergeEspn = function (raw, comp, rows, fetchedAt) {
     const st = (raw.espn[comp] = raw.espn[comp] || {});
@@ -161,6 +163,15 @@
     return { season, row: ["E" + id, date, time, round, home, away, finished ? hg : null, finished ? ag : null, finished ? g || null : null, ex], hid, aid };
   }
 
+  /** Cote de clôture de référence (CLV) : Pinnacle, sinon moyenne du marché, sinon la clôture disponible */
+  const CLOSE_NAMES = { PSC: "Pinnacle", AvgC: "moyenne du marché", B365C: "Bet 365", MaxC: "meilleure cote du marché" };
+  function closeRefOf(r) {
+    const t = r[11] || r[8];
+    if (!t) return null;
+    return { h: t[0], d: t[1], a: t[2], src: `${CLOSE_NAMES[t[3]] || t[3]} à la clôture (football-data.co.uk)`, ref: t[3], final: 1 };
+  }
+  E.closeRefOf = closeRefOf;
+
   /** Association football-data ↔ ESPN : même compétition, date ±1 jour, même score, noms les plus proches. */
   function joinFD(matchesByComp, fdRows) {
     const alias = {}; // comp|fdName -> espnName
@@ -190,6 +201,7 @@
         const ex = m.row[9];
         if (r[7]) ex.odds = { h: r[7][0], d: r[7][1], a: r[7][2], src: `football-data.co.uk (${r[7][3] === "B365" ? "Bet 365" : r[7][3] === "Avg" ? "moyenne du marché" : r[7][3]}, avant-match)` };
         if (r[8]) ex.close = { h: r[8][0], d: r[8][1], a: r[8][2], src: `football-data.co.uk (${r[8][3].replace(/C$/, "")} clôture)` };
+        const cr = closeRefOf(r); if (cr) ex.closeRef = cr;
         if (!ex.odds && r[8] && m.row[6] !== null) ex.oddsIsClose = 1;
         if (r[9] && Number.isFinite(r[9][0])) ex.xg = r[9];
         joined++;
@@ -211,6 +223,7 @@
       const ex = { src: "football-data.co.uk", reg: 1 };
       if (r[7]) ex.odds = { h: r[7][0], d: r[7][1], a: r[7][2], src: "football-data.co.uk (avant-match)" };
       if (r[8]) ex.close = { h: r[8][0], d: r[8][1], a: r[8][2], src: `football-data.co.uk (${r[8][3].replace(/C$/, "")} clôture)` };
+      const cr = closeRefOf(r); if (cr) ex.closeRef = cr;
       if (!ex.odds && r[8] && r[5] !== null) ex.oddsIsClose = 1;
       out.push({ season, row: [`SSL-${r[1]}-${norm(r[3]).replace(/ /g, "")}-${norm(r[4]).replace(/ /g, "")}`, r[1], ukTime(r[1], r[2]), "Saison régulière", r[3], r[4], r[5], r[6], null, ex] });
     }
@@ -253,6 +266,7 @@
     }
     const sslAlias = {};
     const ssl = buildSwiss(raw, sslAlias);
+    const fr = E.joinOddsFr(raw, Object.assign({}, matchesByComp, { SSL: ssl }));
     const competitions = E.COMPS.map(([code, name, country, tz]) => {
       const list = code === "SSL" ? ssl : matchesByComp[code] || [];
       const bySeason = {};
@@ -272,7 +286,7 @@
     const repos = {};
     for (const [k, f] of Object.entries(feeds)) repos[k] = { repo: f.source, commit: (f.fetchedAt || "").replace(/\D/g, "").slice(0, 12), commitDate: f.fetchedAt };
     return { generatedAt: now, version: 2, source: { name: "ESPN + football-data.co.uk + openfootball", license: "données publiques ; usage personnel", url: "", repos },
-      competitions, aliases: Object.assign({}, j.alias, sslAlias), joinStats: { fdJoined: j.joined, fdUnjoined: j.unjoined, upcomingOdds } };
+      competitions, aliases: Object.assign({}, j.alias, sslAlias), joinStats: { fdJoined: j.joined, fdUnjoined: j.unjoined, upcomingOdds, oddsFrJoined: fr.joined, oddsFrUnjoined: fr.unjoined } };
   };
 
   /* ------------------------------------------------------------ collecte web (ESPN, lignes JSON) */
@@ -356,5 +370,99 @@
     if (ing.files) raw.feeds.espn = Object.assign({}, raw.feeds.espn, { fetchedAt, source: "ESPN site API (lecture web, tâche planifiée)" });
     if (ing.odds) raw.feeds.oddsEspn = { fetchedAt, source: "ESPN, cotes Bet 365 (région GB)" };
     return ing;
+  };
+
+  /* ------------------------------------------------------------ téléchargement direct (sans retranscription) */
+  /** Convertit un événement brut du scoreboard ESPN en ligne au format de E.FETCH_PROMPT (mêmes contrôles à l'intégration). */
+  E.espnEventToLine = function (ev) {
+    const c = (ev && ev.competitions && ev.competitions[0]) || {};
+    const cs = c.competitors || [];
+    const H = cs.find((x) => x.homeAway === "home"), A = cs.find((x) => x.homeAway === "away");
+    if (!ev || !H || !A || !H.team || !A.team) return null;
+    const hid = String(H.team.id || H.id || ""), aid = String(A.team.id || A.id || "");
+    const sc = (x) => (x && typeof x.score === "object" && x.score !== null ? (x.score.value !== undefined ? x.score.value : x.score.displayValue) : x.score);
+    const goals = (c.details || []).filter((d) => d && d.scoringPlay).map((d) => {
+      const tid = String((d.team && d.team.id) || "");
+      const ath = (d.athletesInvolved || [])[0];
+      return [tid === hid ? 0 : tid === aid ? 1 : null, ath ? ath.displayName : "?", (d.clock && d.clock.displayValue) || "", d.ownGoal ? "og" : d.penaltyKick ? "p" : ""];
+    }).filter((g) => g[0] !== null);
+    const o = (c.odds || [])[0];
+    const v = (x) => (x && Number.isFinite(+x.value) && +x.value > 1 ? +x.value : null);
+    const odds = o && v(o.homeTeamOdds) && v(o.drawOdds) && v(o.awayTeamOdds) ? [v(o.homeTeamOdds), v(o.drawOdds), v(o.awayTeamOdds), (o.provider && o.provider.name) || "Bet 365"] : null;
+    return { id: String(ev.id), date: ev.date, slug: (ev.season && ev.season.slug) || "", status: ev.status && ev.status.type ? ev.status.type.name : null, neutral: !!c.neutralSite,
+      home: H.team.displayName, away: A.team.displayName, hs: sc(H), as: sc(A), goals, odds, hid, aid };
+  };
+  /** Scoreboard ESPN brut → texte JSON-lines prêt pour E.ingestFiles */
+  E.espnJsonToLines = function (json) {
+    return ((json && json.events) || []).map(E.espnEventToLine).filter(Boolean).map((x) => JSON.stringify(x)).join("\n");
+  };
+  /** Fichiers football-data.co.uk à rafraîchir : saison en cours, ligues « new » (Brésil, Japon, Suisse) et calendriers */
+  E.fdFilesFor = function (today) {
+    const y = +today.slice(0, 4), m = +today.slice(5, 7), y0 = m >= 7 ? y : y - 1;
+    const code = String(y0 % 100).padStart(2, "0") + String((y0 + 1) % 100).padStart(2, "0");
+    return ["E0", "E1", "SP1", "I1", "D1", "F1", "N1"].map((d) => `mmz4281/${code}/${d}.csv`).concat(["new/BRA.csv", "new/JPN.csv", "new/SWZ.csv", "fixtures.csv", "new_league_fixtures.csv"]);
+  };
+  E.fdUrl = (key) => `https://football-data.co.uk/${key}`; // le site redirige www → domaine nu
+
+  /* ------------------------------------------------------------ cotes des bookmakers français (The Odds API) */
+  E.ODDS_API_SPORTS = { PL: "soccer_epl", PD: "soccer_spain_la_liga", FL1: "soccer_france_ligue_one", SA: "soccer_italy_serie_a", BL1: "soccer_germany_bundesliga",
+    CL: "soccer_uefa_champs_league", J1: "soccer_japan_j_league", DED: "soccer_netherlands_eredivisie", BSA: "soccer_brazil_campeonato", ELC: "soccer_efl_champ",
+    SSL: "soccer_switzerland_superleague", SPL: "soccer_saudi_arabia_pro_league", WC: "soccer_fifa_world_cup" };
+  E.FR_BOOKS = { winamax_fr: "Winamax", betclic_fr: "Betclic", unibet_fr: "Unibet", pmu_fr: "PMU", netbet_fr: "NetBet" };
+  /** Adresse d'un relevé 1N2 chez les bookmakers français (1 crédit par appel) */
+  E.oddsApiUrl = (comp, key) => `https://api.the-odds-api.com/v4/sports/${E.ODDS_API_SPORTS[comp]}/odds/?apiKey=${encodeURIComponent(key)}&regions=fr&markets=h2h&oddsFormat=decimal&dateFormat=iso`;
+  /** Une cote 1N2 plausible : trois cotes > 1, marge du bookmaker entre 0 et 25 % */
+  E.plausibleTriple = function (h, d, a) {
+    if (![h, d, a].every((x) => Number.isFinite(x) && x > 1.01 && x < 1000)) return false;
+    const over = 1 / h + 1 / d + 1 / a;
+    return over > 1.0 && over < 1.25;
+  };
+  /**
+   * Intègre la réponse /odds de The Odds API pour une compétition.
+   * Seules les cotes d'avant-match sont gardées (relevé antérieur au coup d'envoi) : la dernière valeur gardée sert de cote de clôture approchée.
+   * raw.oddsFr[id] = [comp, coupEnvoi, domicile, extérieur, { livre: [1, N, 2, majBookmaker] }, relevéLe, premierRelevé]
+   */
+  E.mergeOddsApi = function (raw, comp, events, fetchedAt) {
+    raw.oddsFr = raw.oddsFr || {};
+    const t = Date.parse(fetchedAt);
+    let kept = 0, live = 0, rejected = 0;
+    for (const ev of events || []) {
+      if (!ev || !ev.id || !ev.home_team || !ev.away_team || !ev.commence_time) continue;
+      if (!(Date.parse(ev.commence_time) > t)) { live++; continue; }
+      const books = {};
+      for (const b of ev.bookmakers || []) {
+        if (!E.FR_BOOKS[b.key]) continue;
+        const mk = (b.markets || []).find((x) => x.key === "h2h"); if (!mk) continue;
+        const price = (name) => { const x = (mk.outcomes || []).find((y) => y.name === name); return x ? +x.price : NaN; };
+        const h = price(ev.home_team), d = price("Draw"), a = price(ev.away_team);
+        if (!E.plausibleTriple(h, d, a)) { rejected++; continue; }
+        books[b.key] = [h, d, a, b.last_update || mk.last_update || null];
+      }
+      if (!Object.keys(books).length) continue;
+      const prev = raw.oddsFr[ev.id];
+      raw.oddsFr[ev.id] = [comp, ev.commence_time, ev.home_team, ev.away_team, books, fetchedAt, (prev && prev[6]) || books];
+      kept++;
+    }
+    const lim = new Date(t - 400 * 864e5).toISOString();
+    for (const [id, o] of Object.entries(raw.oddsFr)) if (o[1] < lim) delete raw.oddsFr[id];
+    return { kept, live, rejected };
+  };
+  /** Rattache chaque relevé français à sa rencontre : même compétition, date ±1 jour, noms d'équipes les plus proches. */
+  E.joinOddsFr = function (raw, matchesByComp) {
+    let joined = 0, unjoined = 0;
+    for (const [id, o] of Object.entries(raw.oddsFr || {})) {
+      const [comp, ko, home, away, books, at, first] = o;
+      const t = Date.parse(ko);
+      let best = null, bs = 0;
+      for (const m of matchesByComp[comp] || []) {
+        if (Math.abs(Date.parse(m.row[1] + "T12:00:00Z") - t) > 1.5 * 864e5) continue;
+        const sc = sim(home, m.row[4]) + sim(away, m.row[5]);
+        if (sc > bs) { bs = sc; best = m; }
+      }
+      if (!best || bs < 1.2) { unjoined++; continue; }
+      best.row[9].oddsFr = { books, at, first, ko, eventId: id };
+      joined++;
+    }
+    return { joined, unjoined };
   };
 })(typeof window !== "undefined" ? window : globalThis);

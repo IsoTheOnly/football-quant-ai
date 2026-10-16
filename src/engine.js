@@ -97,7 +97,7 @@
             neutral: x.neutral !== undefined ? !!x.neutral : c.code === "WC" ? !/Mexico|Canada|United States|USA/.test(home) : false,
             regular: x.reg !== undefined ? !!x.reg : undefined,
             odds: x.odds || (x.oddsIsClose && x.close ? Object.assign({}, x.close, { src: x.close.src + " — utilisée faute de cote d'avant-match" }) : null),
-            close: x.close || null, xg: x.xg || null, aet: x.aet || null, ft: x.ft || null, eid: x.eid || null,
+            close: x.close || null, closeRef: x.closeRef || null, oddsFr: x.oddsFr || null, xg: x.xg || null, aet: x.aet || null, ft: x.ft || null, eid: x.eid || null,
             source: src, sourceFile: s.file, sourceCommitDate: s.commitDate,
             webCheck: web,
           });
@@ -562,6 +562,7 @@
     horizonDays: 14,         // pronostics : toutes les rencontres programmées des 14 prochains jours
     ticketFromDow: 4,        // tickets de la semaine : construits à partir du jeudi, sur les matchs du jeudi au dimanche (cotes publiées 3 jours avant)
     paperTickets: true,      // paper betting des 3 tickets (unités fictives, 1 u par ticket)
+    oddsBook: "winamax_fr",  // bookmaker français de référence pour les cotes (The Odds API) ; repli : médiane des bookmakers FR, puis Bet 365
     ticketCfg: null,         // null = scénarios par défaut ; sinon [{ id, lo, hi, stake }]
   };
   FQ.DEFAULT_SETTINGS = DEFAULT_SETTINGS;

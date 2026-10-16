@@ -36,7 +36,7 @@ window.__fqStartApp = function () {
   const Ic = ({ n, s = 16 }) => (LI[n] ? React.createElement(LI[n], { size: s, strokeWidth: 1.75, "aria-hidden": true }) : null);
   const Pill = ({ tone = "muted", children, title }) => html`<span className=${"pill pill-" + tone} title=${title || undefined}>${children}</span>`;
   const DECISION_TONE = { "VALUE BET": "pos", "À SURVEILLER": "warn", "NO BET": "muted", "DONNÉES INSUFFISANTES": "muted" };
-  const STATUS_TONE = { "GAGNÉ": "pos", "PERDU": "neg", "ANNULÉ": "muted", "EN ATTENTE": "info", "NON VÉRIFIABLE": "warn" };
+  const STATUS_TONE = { "GAGNÉ": "pos", "PERDU": "neg", "ANNULÉ": "muted", "EN ATTENTE": "info", "NON VÉRIFIABLE": "warn", "À VÉRIFIER": "warn" };
   const DecisionPill = ({ d }) => html`<${Pill} tone=${DECISION_TONE[d] || "muted"}>${d === "VALUE BET" ? html`<${Ic} n="CircleCheck" s=${12} />` : d === "À SURVEILLER" ? html`<${Ic} n="Eye" s=${12} />` : html`<${Ic} n="CircleSlash" s=${12} />`} ${d}<//>`;
   const Card = ({ title, eyebrow, right, children, className = "" }) => html`
     <section className=${"card " + className}>
@@ -339,6 +339,7 @@ window.__fqStartApp = function () {
             <button className="pl-chip" onClick=${() => setTab("audit")} title="Vos paris réels saisis">
               <span className="muted tiny">Réel</span><b className=${"mono " + (realS.profit > 0 ? "t-pos" : realS.profit < 0 ? "t-neg" : "")}>${sgn(realS.profit)} €</b></button>
             <div className="row gap-1">
+              <${Btn} small kind="primary" onClick=${() => setRealForm({ legs: [], label: "Mon ticket" })} title="Enregistrer un ticket joué chez votre bookmaker"><${Ic} n="Plus" /> Mon ticket<//>
               <${Btn} small onClick=${() => setPanel("data")} title="Sauvegarde, import, export"><${Ic} n="Database" /> <span className="hide-sm">Données</span><//>
               <${Btn} small onClick=${() => setPanel("settings")} title="Paramètres de risque"><${Ic} n="SlidersHorizontal" /> <span className="hide-sm">Paramètres</span><//>
             </div>
@@ -397,7 +398,7 @@ window.__fqStartApp = function () {
         <div><div className="eyebrow">Dernier cycle (cette page)</div><div className="small">${last ? `${dtFR(last.at)} · ${sum(last)}` : "en cours…"}</div></div>
         ${ctx.mode === "real" && html`<div><div className="eyebrow">Tâche planifiée quotidienne</div><div className="small">${job ? `${dtFR(job.at)} · ${sum(job.report)}` : P.shared ? "pas encore exécutée" : "base de l'artefact non disponible dans cette vue"}</div></div>`}
         <div><div className="eyebrow">Données</div><div className=${"small " + (ctx.dataAgeDays > 10 ? "t-warn" : "")}>${ctx.mode === "demo" ? "fictives (démo)" : `dernier résultat connu le ${dFR(ctx.matches.filter((m) => m.hg !== null && !m.manual && m.date <= ctx.today).map((m) => m.date).sort().slice(-1)[0])} (${ctx.dataAgeDays} j)`}</div></div>
-        <div><div className="eyebrow">Opportunités ouvertes</div><div className="small">${pending}${noOdds ? ` dont ${noOdds} sans cote publiée (BTTS, joueurs, compétitions sans cote à ce jour) : cote juste et cote minimale affichées` : ""}</div></div>
+        <div><div className="eyebrow">Opportunités ouvertes</div><div className="small">${pending}${noOdds ? ` dont ${noOdds} sans cote publiée (BTTS, joueurs, compétitions sans cote à ce jour) : seuil du modèle et cote minimale affichées` : ""}</div></div>
       </div>`}
       ${open && html`<div className="mt-2">
         ${last && last.notes && last.notes.length > 0 && html`<ul className="notes small t-warn">${last.notes.map((n, i) => html`<li key=${i}>${n}</li>`)}</ul>`}
@@ -622,7 +623,7 @@ window.__fqStartApp = function () {
     const b = useMemo(() => buildPrediction(ctx, match, opts), [match.id, JSON.stringify(drivers), neutral, useManual, manual.h, manual.a, ctx.getModel, ctx.state.calibration.version, applyStake, ctx.state.calibration.stakeTest]);
     const b0 = useMemo(() => (applyStake ? buildPrediction(ctx, match, Object.assign({}, opts, { applyStake: false })) : null), [b]);
     const pl = useMemo(() => (b.pr.ok ? players.map((p) => computePlayer(ctx, match, b, p)) : []), [b, players]);
-    useEffect(() => { if (ctx.mode === "demo") { const m = demoOddsMap(ctx, match, players) || {}; setOdds(m); } else { const m = FQ.P.matchOddsMap(match); if (m) setOdds(m); } }, [match.id]);
+    useEffect(() => { if (ctx.mode === "demo") { const m = demoOddsMap(ctx, match, players) || {}; setOdds(m); } else { const m = FQ.P.matchOddsMap(match, ctx.state.settings); if (m) setOdds(m); } }, [match.id]);
     const existing = ctx.state.predictions.filter((p) => p.matchId === match.id);
 
     function savePlayers(next) {
@@ -784,8 +785,12 @@ window.__fqStartApp = function () {
       ${(() => { const oddsV = {}; Object.entries(odds || {}).forEach(([k, v]) => { if (v && Number.isFinite(v.v)) oddsV[k] = v.v; });
         const pk = FQ.preferredPick(mk, b.rel.score, oddsV, ctx.effSettings, { h: match.home, a: match.away });
         return html`<div className="pickbox mt-2"><div className="eyebrow">Choix préférentiel</div><div className="row gap-2 items-center wrap"><b className="pick-l">${pk.label}</b><span className="mono">${pct(pk.p)}</span>
-          ${pk.kind === "value" ? html`<${Pill} tone="pos">Value bet<//>` : html`<${Pill} tone="info">Pronostic sans mise<//>`}${pk.odds ? html`<span className="small">cote ${fr(pk.odds, 2)}</span>` : null}<span className="small muted">cote minimale ${fr(pk.minOdds, 2)}</span></div>
+          ${pk.kind === "value" ? html`<${Pill} tone="pos">Value bet<//>` : html`<${Pill} tone="info">Pronostic sans mise<//>`}${pk.odds ? html`<span className="small">cote ${fr(pk.odds, 2)} · ${srcShort((odds[pk.market + "|" + pk.sel] || {}).src)}</span>` : html`<span className="small muted">aucune cote de bookmaker</span>`}<span className="small muted">cote minimale ${fr(pk.minOdds, 2)} (seuil du modèle)</span></div>
           <div className="small muted">${pk.why}</div></div>`; })()}
+      ${match.oddsFr && match.oddsFr.books && html`<details className="mt-2"><summary className="small">Cotes 1N2 des bookmakers français · relevées le ${dtFR(match.oddsFr.at)}</summary>
+        <${TableWrap}><table className="tbl tiny"><thead><tr><th>Bookmaker</th><th>1</th><th>N</th><th>2</th><th>Marge</th></tr></thead><tbody>
+        ${Object.entries(match.oddsFr.books).map(([k, v]) => html`<tr key=${k} className=${k === (ctx.state.settings.oddsBook || "winamax_fr") ? "hl" : ""}><td>${(FQ.ETL.FR_BOOKS || {})[k] || k}</td><td className="mono">${fr(v[0], 2)}</td><td className="mono">${fr(v[1], 2)}</td><td className="mono">${fr(v[2], 2)}</td><td className="mono">${pct(1 / v[0] + 1 / v[1] + 1 / v[2] - 1, 1)}</td></tr>`)}
+        </tbody></table><//></details>`}
       ${b.pr.blendInfo && html`<div className="note small mt-2">Cote 1N2 connue (${b.pr.blendInfo.src}) : probabilités retenues = ${Math.round(100 * b.pr.blendInfo.w)} % modèle + ${Math.round(100 * (1 - b.pr.blendInfo.w))} % marché sans marge, poids appris sur 12 mois (sur cet historique, le marché seul prédisait mieux que le modèle seul). Modèle seul : 1 ${pct(b.pr.modelMarkets.p1)} · N ${pct(b.pr.modelMarkets.pN)} · 2 ${pct(b.pr.modelMarkets.p2)}. BTTS : modèle seul (pas de cote BTTS gratuite).</div>`}
       <div className="row gap-3 wrap mt-2 small">
         <span>λ dom. <b className="mono">${fr(b.pr.lambdaHome, 2)}</b>${b.pr.base ? html` <span className="muted">(base ${fr(b.pr.base.h, 2)})</span>` : ""}</span>
@@ -813,7 +818,7 @@ window.__fqStartApp = function () {
       </div>
       <div className="eyebrow mt-3">Cotes et valeur ${ctx.mode === "demo" ? "(cotes fictives pré-remplies, modifiables)" : "(1N2 : cotes Bet 365 via ESPN ou football-data.co.uk quand elles sont publiées ; autres marchés : saisie)"}</div>
       <${TableWrap}><table className="tbl">
-        <thead><tr><th>Sélection</th><th>Prob.</th><th>Fiab.</th><th>Cote</th><th>P implicite</th><th>Cote juste</th><th>Cote min.</th><th>EV</th><th>Décision</th><th>Mise</th></tr></thead>
+        <thead><tr><th>Sélection</th><th>Prob.</th><th>Fiab.</th><th>Cote</th><th>P implicite</th><th title="1 / probabilité du modèle : ce n'est pas une cote de bookmaker">Seuil 1/p</th><th>Cote min.</th><th>EV</th><th>Décision</th><th>Mise</th></tr></thead>
         <tbody>${evaluated.map((r) => html`<tr key=${r.market + r.sel}>
           <td>${r.label}</td><td className="mono">${pct(r.p)}</td><td className="mono">${r.rel}</td>
           <td><${NumInput} value=${r.odds} min=${1.01} max=${1000} width="4.6rem" placeholder="cote" onChange=${(v) => setOdds({ ...odds, [r.market + "|" + r.sel]: v === null ? null : { v, src: "saisie utilisateur" } })} /></td>
@@ -1150,7 +1155,7 @@ window.__fqStartApp = function () {
             ${open === o.id && html`<tr className="explain"><td colSpan="13">
               <div className="explain-in">
                 <div><b>Pourquoi :</b> ${r.reasons.join(" · ") || "—"}</div>
-                <div><b>Calcul :</b> EV = p × c − 1 = ${o.p === null ? "—" : fr(o.p, 4)} × ${fr(o.odds, 2)} − 1 = ${r.ev === null || r.ev === undefined ? "—" : fr(r.ev, 4)} · cote juste 1/p = ${fr(r.fair, 3)} · cote minimale (1 + ${fr(settings.evMin, 2)})/p = ${fr(r.minOdds, 3)} · probabilité implicite 1/c = ${pct(r.implied)}</div>
+                <div><b>Calcul :</b> EV = p × c − 1 = ${o.p === null ? "—" : fr(o.p, 4)} × ${fr(o.odds, 2)} − 1 = ${r.ev === null || r.ev === undefined ? "—" : fr(r.ev, 4)} · seuil du modèle 1/p (pas une cote de bookmaker) = ${fr(r.fair, 3)} · cote minimale (1 + ${fr(settings.evMin, 2)})/p = ${fr(r.minOdds, 3)} · probabilité implicite 1/c = ${pct(r.implied)}</div>
                 ${r.stakeSteps && r.stakeSteps.length > 0 && html`<div><b>Mise :</b> ${r.stakeSteps.join(" → ")}</div>`}
                 ${r.agent && html`<div><b>Agent :</b> état ${r.agent.key} · n = ${r.agent.n}${r.agent.active ? ` · Q moyen ${sgn(r.agent.mean * 100, 1)} % · borne haute ${sgn(r.agent.ucb * 100, 1)} %` : ` · inactif (n < ${settings.agentMinN}) : politique déterministe seule`}</div>`}
                 <div className="muted small">Source de la cote : ${o.oddsSource || "aucune"}${o.oddsAt ? " · " + dtFR(o.oddsAt) : ""} · snapshot ${o.predictionId || "—"} · données manquantes : ${o.missing || 0}</div>
@@ -1313,7 +1318,7 @@ window.__fqStartApp = function () {
         <div className="mc-main min-w-0">
           <div className="mc-teams ellip">${p.home} <span className="muted">–</span> ${p.away}</div>
           <div className="mc-pick"><span className="mc-sel">${p.label}</span><span className="pbar" aria-hidden="true"><i style=${{ width: Math.round(100 * p.p) + "%" }}></i></span><span className="mono small">${pct(p.p, 0)}</span></div>
-          <div className="muted tiny">${p.odds ? html`cote <b className="mono t-fg">${fr(p.odds, 2)}</b>${p.kind === "value" ? html` · <span className="t-pos">value bet</span>` : ""}` : html`pas de cote publiée · intéressant à partir de <span className="mono">${fr(p.minOdds, 2)}</span>`} · fiabilité ${p.rel}/100</div>
+          <div className="muted tiny">${p.odds ? html`cote <b className="mono t-fg">${fr(p.odds, 2)}</b> <span title=${p.oddsSrc || ""}>${srcShort(p.oddsSrc)}</span>${p.kind === "value" ? html` · <span className="t-pos">value bet</span>` : ""}` : html`aucune cote de bookmaker pour ce marché · à jouer à partir de <span className="mono">${fr(p.minOdds, 2)}</span> (seuil du modèle)`} · fiabilité ${p.rel}/100</div>
           ${open === p.id && html`<div className="small mt-1 explain-in"><div>${p.why}</div><div className="muted tiny mt-1">Règle : une value bet admissible (cote connue, espérance ≥ seuil, fiabilité suffisante) est choisie en priorité ; sinon l'issue la plus probable parmi 1, N, 2 et « les deux équipes marquent » oui / non. Choix figé au coup d'envoi.</div></div>`}
         </div>
         <div className="mc-act">
@@ -1337,7 +1342,74 @@ window.__fqStartApp = function () {
     </div>`;
   }
 
-  /** Saisie d'un pari réel (euros) : depuis un ticket, le panier, ou libre */
+  /* --------------------------------------------------------------- saisie d'un ticket réel */
+  const BET_MARKETS = [
+    { id: "1N2", label: "Résultat (1N2)", sels: [["1", "1"], ["N", "N · nul"], ["2", "2"]] },
+    { id: "DC", label: "Double chance", sels: [["1N", "1N"], ["12", "12"], ["N2", "N2"]] },
+    { id: "BTTS", label: "Les deux équipes marquent", sels: [["Oui", "Oui"], ["Non", "Non"]] },
+    { id: "Buts", label: "Nombre de buts", sels: ["+0.5", "+1.5", "+2.5", "+3.5", "+4.5", "-0.5", "-1.5", "-2.5", "-3.5", "-4.5"].map((x) => [x, (x[0] === "+" ? "Plus de " : "Moins de ") + x.slice(1).replace(".", ",") + " buts"]) },
+    { id: "Buteur", label: "Buteur", text: "Nom du joueur" },
+    { id: "Autre", label: "Autre (réglé à la main)", text: "Votre sélection" },
+  ];
+  const BOOKS = ["Winamax", "Betclic", "Unibet", "PMU", "NetBet", "Parions Sport", "ZEbet", "Bwin", "Vbet"];
+  const nrm = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  function legLabel(m, market, sel) {
+    if (market === "1N2") return sel === "1" ? `1 · ${m.home}` : sel === "2" ? `2 · ${m.away}` : "N · match nul";
+    if (market === "DC") return `Double chance ${sel}`;
+    if (market === "BTTS") return sel === "Oui" ? "Les deux équipes marquent" : "Au moins une équipe ne marque pas";
+    if (market === "Buts") return (sel[0] === "+" ? "Plus de " : "Moins de ") + sel.slice(1).replace(".", ",") + " buts";
+    if (market === "Buteur") return `Buteur : ${sel}`;
+    return sel;
+  }
+  /** Ajout d'une sélection : recherche du match, marché, sélection, cote obtenue */
+  function LegPicker({ ctx, onAdd, taken }) {
+    const [q, setQ] = useState("");
+    const [mid, setMid] = useState(null);
+    const [mkt, setMkt] = useState("1N2");
+    const [sel, setSel] = useState("1");
+    const [txt, setTxt] = useState("");
+    const [odds, setOdds] = useState(null);
+    const lo = U.addDays(ctx.today, -3), hi = U.addDays(ctx.today, 14);
+    const pool = useMemo(() => ctx.matches.filter((m) => m.date >= lo && m.date <= hi && m.status !== "ANNULÉ"), [ctx.matches, lo, hi]);
+    const nq = nrm(q).trim();
+    const res = nq.length >= 2 ? pool.filter((m) => nrm(m.home + " " + m.away).includes(nq) && !taken.has(m.id)).slice(0, 8) : [];
+    const m = mid ? ctx.matchById.get(mid) : null;
+    const M = BET_MARKETS.find((x) => x.id === mkt);
+    const ref = m && mkt === "1N2" ? FQ.P.refOdds(m, ctx.state.settings) : null;
+    const refV = ref ? ref[{ 1: "h", N: "d", 2: "a" }[sel]] : null;
+    const selV = M.text ? txt.trim() : sel;
+    const ok = m && selV && (!odds || odds > 1);
+    function add() {
+      if (!ok) return;
+      const ko = FQ.time.kickoffUtc(m.date, m.time, m.tz);
+      onAdd({ matchId: m.id, comp: m.comp, date: m.date, time: m.time || "", kickoff: ko ? new Date(ko).toISOString() : null, home: m.home, away: m.away,
+        market: mkt, sel: selV, label: legLabel(m, mkt, selV), p: null, odds: odds > 1 ? odds : null, status: "EN ATTENTE" });
+      setMid(null); setQ(""); setOdds(null); setTxt("");
+    }
+    return html`<div className="subform">
+      <div className="eyebrow">Ajouter une sélection</div>
+      ${!m ? html`<${Field} label="Match" id="lp-q" hint="Tapez au moins 2 lettres d'une équipe (matchs des 3 derniers jours et des 14 prochains)."><input id="lp-q" className="inp" value=${q} placeholder="ex. Lens" autoComplete="off" onChange=${(e) => setQ(e.target.value)} /><//>
+        ${res.length > 0 && html`<div className="chips">${res.map((x) => html`<button key=${x.id} className="chip" onClick=${() => { setMid(x.id); setSel(BET_MARKETS[0].sels[0][0]); setMkt("1N2"); }}><span className="comp-tag">${SHORT[x.comp] || x.comp}</span> ${x.home} – ${x.away} <span className="muted tiny">${koText(ctx, x)}</span></button>`)}</div>`}
+        ${nq.length >= 2 && !res.length && html`<div className="muted small mt-1">Aucun match trouvé. Pour un match hors des 13 compétitions, choisissez « Autre » après avoir ajouté un match proche, ou décrivez le pari ci-dessous.</div>`}`
+      : html`<div className="row gap-2 items-center wrap mb-2"><span className="comp-tag">${SHORT[m.comp] || m.comp}</span><b>${m.home} – ${m.away}</b><span className="muted small">${koText(ctx, m)}</span><button className="link small" onClick=${() => setMid(null)}>changer</button></div>
+        <div className="form-grid">
+          <${Field} label="Marché" id="lp-m"><select id="lp-m" className="inp" value=${mkt} onChange=${(e) => { const x = BET_MARKETS.find((y) => y.id === e.target.value); setMkt(x.id); if (x.sels) setSel(x.sels[0][0]); }}>${BET_MARKETS.map((x) => html`<option key=${x.id} value=${x.id}>${x.label}</option>`)}</select><//>
+          ${M.sels ? html`<${Field} label="Sélection" id="lp-s"><select id="lp-s" className="inp" value=${sel} onChange=${(e) => setSel(e.target.value)}>${M.sels.map(([v, l]) => html`<option key=${v} value=${v}>${mkt === "1N2" ? legLabel(m, "1N2", v) : l}</option>`)}</select><//>`
+            : html`<${Field} label=${M.text} id="lp-t"><input id="lp-t" className="inp" value=${txt} onChange=${(e) => setTxt(e.target.value)} /><//>`}
+          <${Field} label="Cote obtenue" id="lp-o" hint=${refV ? `repère : ${fr(refV, 2)} chez ${srcShort(ref.src)}` : "facultative si vous saisissez la cote totale"}><${NumInput} id="lp-o" value=${odds} min=${1.01} max=${1000} placeholder=${refV ? fr(refV, 2) : "ex. 1,85"} onChange=${setOdds} /><//>
+        </div>
+        <div className="row justify-end mt-2"><${Btn} small kind="primary" disabled=${!ok} onClick=${add}><${Ic} n="Plus" /> Ajouter au ticket<//></div>`}
+    </div>`;
+  }
+  /** Nom court d'une source de cote : « Winamax », « médiane FR », « Bet 365 »… */
+  function srcShort(src) {
+    const t = String(src || "");
+    if (/^médiane/.test(t)) return "médiane FR";
+    if (/Bet 365/.test(t)) return "Bet 365";
+    return t.split(/ \(| ·| via /)[0] || "—";
+  }
+
+  /** Saisie d'un pari réel (euros) : depuis un ticket proposé, le panier, ou de zéro */
   function RealBetForm({ ctx, init, onClose }) {
     const [legs, setLegs] = useState(() => (init.legs || []).map((l) => Object.assign({}, l)));
     const prod = legs.length && legs.every((l) => Number.isFinite(l.odds)) ? Math.round(legs.reduce((a, l) => a * l.odds, 1) * 100) / 100 : null;
@@ -1345,10 +1417,11 @@ window.__fqStartApp = function () {
     const [touched, setTouched] = useState(false);
     const [stake, setStake] = useState(null);
     const [book, setBook] = useState(() => P.pref("book") || "");
-    const [label, setLabel] = useState(init.label || "Pari libre");
+    const [label, setLabel] = useState(init.label || "Mon ticket");
     const [desc, setDesc] = useState("");
-    const free = !legs.length;
     useEffect(() => { if (!touched) setTotal(prod); }, [prod]);
+    const free = !legs.length;
+    const manual = legs.some((l) => l.market === "Autre");
     const ok = stake > 0 && total > 1 && (!free || desc.trim().length > 1);
     function save() {
       if (!ok) return;
@@ -1361,24 +1434,25 @@ window.__fqStartApp = function () {
         return s;
       });
       if (init.fromSlip) ctx.clearSlip();
-      ctx.notify("Pari réel enregistré : il sera réglé automatiquement avec les résultats", "pos");
+      ctx.notify(free || manual ? "Ticket enregistré : vous le réglerez à la main" : "Ticket enregistré : il sera réglé automatiquement avec les résultats", "pos");
       onClose();
     }
-    return html`<div className="overlay" role="dialog" aria-modal="true" aria-label="Enregistrer un pari réel"><div className="dialog wide">
-      <h3>Enregistrer mon pari réel</h3>
-      <p className="muted small">Saisissez la cote et la mise réellement obtenues chez votre bookmaker. Les sélections liées à un match sont réglées automatiquement ; un pari libre se règle à la main.</p>
+    return html`<div className="overlay" role="dialog" aria-modal="true" aria-label="Saisir mon ticket réel"><div className="dialog wide">
+      <h3>Saisir mon ticket réel</h3>
+      <p className="muted small">Ajoutez chaque sélection jouée, avec la cote obtenue chez votre bookmaker, puis la mise. Résultat, double chance, les deux équipes marquent et nombre de buts sont réglés automatiquement ; un buteur est confirmé automatiquement s'il a marqué, sinon à vérifier à la main.</p>
       <div className="form-grid">
         <${Field} label="Nom" id="rb-l"><input id="rb-l" className="inp" value=${label} onChange=${(e) => setLabel(e.target.value)} /><//>
-        <${Field} label="Bookmaker" id="rb-b"><input id="rb-b" className="inp" value=${book} placeholder="ex. Winamax" onChange=${(e) => setBook(e.target.value)} /><//>
+        <${Field} label="Bookmaker" id="rb-b"><input id="rb-b" className="inp" list="rb-books" value=${book} placeholder="ex. Winamax" onChange=${(e) => setBook(e.target.value)} /><datalist id="rb-books">${BOOKS.map((b) => html`<option key=${b} value=${b} />`)}</datalist><//>
       </div>
-      ${free ? html`<${Field} label="Description du pari" id="rb-d"><input id="rb-d" className="inp" value=${desc} placeholder="ex. Combiné PSG gagne + Lens BTTS" onChange=${(e) => setDesc(e.target.value)} /><//>` :
-      html`<div className="rb-legs">${legs.map((l, i) => html`<div key=${i} className="rb-leg">
+      ${legs.length > 0 && html`<div className="rb-legs">${legs.map((l, i) => html`<div key=${i} className="rb-leg">
         <div className="min-w-0"><div className="tiny muted mono">${koText(ctx, l)} · ${SHORT[l.comp] || l.comp}</div><div className="small ellip">${l.home} – ${l.away} · <b>${l.label}</b></div></div>
         <${NumInput} value=${l.odds} min=${1.01} max=${1000} width="5rem" placeholder="cote" onChange=${(v) => setLegs(legs.map((x, j) => (j === i ? Object.assign({}, x, { odds: v }) : x)))} />
         <button className="iconbtn" aria-label="Retirer" title="Retirer" onClick=${() => setLegs(legs.filter((_, j) => j !== i))}><${Ic} n="X" s=${15} /></button>
       </div>`)}</div>`}
+      <${LegPicker} ctx=${ctx} taken=${new Set(legs.map((l) => l.matchId))} onAdd=${(l) => setLegs(legs.concat([l]))} />
+      ${free && html`<${Field} label="Ou décrivez un pari sans match de la liste" id="rb-d"><input id="rb-d" className="inp" value=${desc} placeholder="ex. Combiné tennis, réglé à la main" onChange=${(e) => setDesc(e.target.value)} /><//>`}
       <div className="form-grid mt-2">
-        <${Field} label="Cote totale obtenue" id="rb-o" hint=${prod && !free ? `produit des cotes : ${fr(prod, 2)}` : null}><${NumInput} id="rb-o" value=${total} min=${1.01} max=${100000} onChange=${(v) => { setTouched(true); setTotal(v); }} /><//>
+        <${Field} label="Cote totale obtenue" id="rb-o" hint=${prod && !free ? `produit des cotes : ${fr(prod, 2)} (modifiable : boost, cote arrondie…)` : null}><${NumInput} id="rb-o" value=${total} min=${1.01} max=${100000} onChange=${(v) => { setTouched(true); setTotal(v); }} /><//>
         <${Field} label="Mise (€)" id="rb-s"><${NumInput} id="rb-s" value=${stake} min=${0.01} max=${100000} placeholder="ex. 5" onChange=${setStake} /><//>
         <div className="field"><span className="field-l">Gain possible</span><b className="mono rb-gain">${stake > 0 && total > 1 ? fr(stake * total, 2) + " €" : "—"}</b></div>
       </div>
@@ -1402,7 +1476,8 @@ window.__fqStartApp = function () {
         return s; });
     }
     function del(id) { ctx.update((s) => { s.realBets = (s.realBets || []).filter((x) => x.id !== id); s.deletedReal = (s.deletedReal || []).concat([id]); return s; }); }
-    const legsLine = (b) => b.legs.length ? b.legs.map((l) => html`<span key=${l.matchId + l.sel} className=${"leg-chip" + (l.status === "GAGNÉ" ? " ok" : l.status === "PERDU" ? " ko" : "")}>${l.home} – ${l.away} : <b>${l.label}</b>${l.score ? ` (${l.score})` : ""}</span>`) : html`<span className="small">${b.desc}</span>`;
+    const legsLine = (b) => b.legs.length ? b.legs.map((l) => html`<span key=${l.matchId + l.sel} className=${"leg-chip" + (l.status === "GAGNÉ" ? " ok" : l.status === "PERDU" ? " ko" : "")} title=${l.clv ? `Clôture ${fr(l.clv.close, 2)} (${l.clv.src})` : l.oddsSrc || ""}>${l.home} – ${l.away} : <b>${l.label}</b>${Number.isFinite(l.odds) ? html` <span className="mono">@${fr(l.odds, 2)}</span>` : ""}${l.score ? ` (${l.score})` : ""}${l.status === "À VÉRIFIER" ? html` <span className="t-warn">à vérifier</span>` : ""}${l.clv ? html` <span className=${"mono " + (l.clv.ev > 0 ? "t-pos" : "t-neg")}>CLV ${sgn(100 * l.clv.ev, 1)} %</span>` : ""}</span>`) : html`<span className="small">${b.desc}</span>`;
+    const clvLine = (b) => b.clv ? html`<div className=${"tiny mono " + (b.clv.ev > 0 ? "t-pos" : "t-neg")} title=${`Cote de clôture ${fr(b.clv.close, 2)} · ${b.clv.src}${b.clv.final ? "" : " (provisoire)"}`}>CLV ${sgn(100 * b.clv.ev, 1)} %${b.clv.final ? "" : " (prov.)"}</div>` : null;
     return html`<${Card} eyebrow="Suivi" title="Mes paris" right=${html`<div className="seg">${[["real", `Réels (${real.length})`], ["paper", `Paper betting (${paper.length})`]].map(([k, l]) => html`<button key=${k} className=${view === k ? "on" : ""} onClick=${() => setView(k)}>${l}</button>`)}</div>`}>
       ${view === "real" ? html`
         <div className="stats mb-2">
@@ -1410,7 +1485,7 @@ window.__fqStartApp = function () {
           <${Stat} label="Rendement" value=${rs.roi === null ? "—" : sgn(100 * rs.roi, 1) + " %"} sub=${`sur ${fr(rs.staked, 2)} € misés`} />
           <${Stat} label="En cours" value=${rs.open} sub=${`${fr(rs.openStake, 2)} € engagés`} />
         </div>
-        <div className="row gap-2 mb-2 wrap"><${Btn} small onClick=${() => ctx.openReal({ legs: [], label: "Pari libre" })}><${Ic} n="Plus" /> Ajouter un pari libre<//><span className="muted small">Pour un pari joué depuis un ticket ou votre panier, utilisez « Je l'ai joué ».</span></div>
+        <div className="row gap-2 mb-2 wrap"><${Btn} small kind="primary" onClick=${() => ctx.openReal({ legs: [], label: "Mon ticket" })}><${Ic} n="Plus" /> Saisir mon ticket<//><span className="muted small">Pour un pari joué depuis un ticket ou votre panier, utilisez « Je l'ai joué ».</span></div>
         ${!real.length ? html`<${Empty} icon="Wallet">Aucun pari réel enregistré. Quand vous jouez un ticket ou une sélection, cliquez « Je l'ai joué » : le résultat sera suivi automatiquement.<//>` :
         html`<div className="betlist">${real.map((b) => html`<div key=${b.id} className="betrow">
           <div className="min-w-0">
@@ -1418,10 +1493,10 @@ window.__fqStartApp = function () {
             <div className="legs-line">${legsLine(b)}</div>
           </div>
           <div className="betrow-r">
-            <div className="mono small">${fr(b.stake, 2)} € × ${fr(b.totalOdds, 2)}</div>
+            <div className="mono small">${fr(b.stake, 2)} € × ${fr(b.totalOdds, 2)}</div>${clvLine(b)}
             <div className=${"mono " + (b.profit > 0 ? "t-pos" : b.profit < 0 ? "t-neg" : "muted")}>${b.status === "EN ATTENTE" ? `gain possible ${fr(b.stake * b.totalOdds, 2)} €` : sgn(b.profit) + " €"}</div>
             <div className="row gap-1 justify-end wrap">
-              ${b.status === "EN ATTENTE" || b.manualStatus ? html`${["GAGNÉ", "PERDU", "ANNULÉ"].map((s) => html`<button key=${s} className=${"mini" + (b.manualStatus === s ? " on" : "")} onClick=${() => setManual(b.id, b.manualStatus === s ? null : s)} title=${b.legs.length ? "Forcer le statut (sinon réglé automatiquement)" : "Régler ce pari"}>${s === "GAGNÉ" ? "Gagné" : s === "PERDU" ? "Perdu" : "Annulé"}</button>`)}` : null}
+              ${b.status === "EN ATTENTE" || b.status === "À VÉRIFIER" || b.manualStatus ? html`${["GAGNÉ", "PERDU", "ANNULÉ"].map((s) => html`<button key=${s} className=${"mini" + (b.manualStatus === s ? " on" : "")} onClick=${() => setManual(b.id, b.manualStatus === s ? null : s)} title=${b.legs.length ? "Forcer le statut (sinon réglé automatiquement)" : "Régler ce pari"}>${s === "GAGNÉ" ? "Gagné" : s === "PERDU" ? "Perdu" : "Annulé"}</button>`)}` : null}
               <button className="mini" onClick=${() => setConfirmDel(b)} title="Supprimer"><${Ic} n="Trash2" s=${13} /></button>
             </div>
           </div>
@@ -1437,7 +1512,7 @@ window.__fqStartApp = function () {
             <div className="row gap-2 items-center wrap"><b>${t.label}</b><${Pill} tone=${STATUS_TONE[t.status] || "muted"}>${t.status === "EN ATTENTE" ? (t.frozen ? "EN COURS" : "OUVERT") : t.status}<//><span className="muted tiny">semaine du ${dFR(t.week)}</span></div>
             <div className="legs-line">${legsLine(t)}</div>
           </div>
-          <div className="betrow-r"><div className="mono small">${fr(t.stake, 0)} u × ${fr(t.totalOdds, 2)}</div><div className="muted tiny">chance estimée ${pct(t.pJoint, 1)}</div>
+          <div className="betrow-r"><div className="mono small">${fr(t.stake, 0)} u × ${fr(t.totalOdds, 2)}</div><div className="muted tiny">chance estimée ${pct(t.pJoint, 1)}</div>${clvLine(t)}
             <div className=${"mono " + (t.profit > 0 ? "t-pos" : t.profit < 0 ? "t-neg" : "muted")}>${t.status === "EN ATTENTE" ? "—" : sgn(t.profit) + " u"}</div></div>
         </div>`)}</div>`}`}
       <${Confirm} open=${!!confirmDel} title="Supprimer ce pari ?" text=${confirmDel ? `${confirmDel.label} · ${fr(confirmDel.stake, 2)} € × ${fr(confirmDel.totalOdds, 2)}` : ""} danger yesLabel="Supprimer" onNo=${() => setConfirmDel(null)} onYes=${() => { del(confirmDel.id); setConfirmDel(null); }} />
@@ -1616,6 +1691,22 @@ window.__fqStartApp = function () {
   /* =========================================================================
      ONGLET 4 — PERFORMANCE & BACKTEST
      ========================================================================= */
+  /**
+   * Mesure de la cote de clôture : avoir pris une cote meilleure que la cote de clôture est le signe le plus fiable d'un avantage réel,
+   * bien avant que les résultats ne parlent. Référence : Pinnacle à la clôture (football-data.co.uk), sinon dernier relevé avant le match.
+   */
+  function ClvCard({ ctx }) {
+    const { state } = ctx;
+    const groups = [["Choix du modèle (1 par match)", (state.picks || []).filter((p) => p.clv)], ["Tickets paper", (state.paperTickets || []).filter((t) => t.clv)], ["Mes paris réels", (state.realBets || []).filter((t) => t.clv)]];
+    const sum = (list) => { const v = list.map((x) => x.clv.ev); const n = v.length; if (!n) return null; const mean = v.reduce((a, x) => a + x, 0) / n; const sd = n > 1 ? Math.sqrt(v.reduce((a, x) => a + (x - mean) ** 2, 0) / (n - 1)) : null;
+      return { n, mean, beat: v.filter((x) => x > 0).length, se: sd !== null ? sd / Math.sqrt(n) : null, fin: list.filter((x) => x.clv.final).length }; };
+    return html`<${Card} eyebrow="Avantage réel" title="Cote prise vs cote de clôture (CLV)">
+      <p className="muted small lead">Pour chaque sélection jouée, on compare la cote prise à la cote de clôture : Pinnacle juste avant le coup d'envoi (publiée par football-data.co.uk quelques jours après), sinon le dernier relevé de votre bookmaker avant le match (provisoire). L'espérance à la clôture = cote prise × probabilité sans marge de la clôture − 1. Positive en moyenne sur beaucoup de paris : le modèle bat le marché. Seul le marché 1N2 a une cote de clôture.</p>
+      <div className="stats">${groups.map(([label, list]) => { const r = sum(list); return html`<${Stat} key=${label} label=${label} value=${r ? sgn(100 * r.mean, 1) + " %" : "—"} tone=${r ? (r.mean > 0 ? "pos" : "neg") : null}
+        sub=${r ? `${r.beat}/${r.n} au-dessus de la clôture${r.se !== null ? ` · ± ${fr(196 * r.se, 1)} pts (95 %)` : ""}${r.fin < r.n ? ` · ${r.n - r.fin} provisoire(s)` : ""}` : "pas encore de clôture mesurée"} />`; })}</div>
+    <//>`;
+  }
+
   function Performance({ ctx }) {
     const { state, acct, settings } = ctx;
     const [hq, setHq] = useState(""); const [hComp, setHComp] = useState("ALL"); const [hMarket, setHMarket] = useState("ALL"); const [hStatus, setHStatus] = useState("ALL");
@@ -1648,6 +1739,7 @@ window.__fqStartApp = function () {
     }
 
     return html`<div className="stack">
+      <${ClvCard} ctx=${ctx} />
       <div className="stats">
         <${Stat} label="Capital (unités)" value=${eur(acct.bankroll, settings.currency)} sub=${`capital ${eur(acct.initial, settings.currency)} · cash ${eur(acct.cash, settings.currency)}`} />
         <${Stat} label="Profit net" value=${(acct.realized >= 0 ? "+" : "") + eur(acct.realized, settings.currency)} tone=${acct.realized >= 0 ? "pos" : "neg"} />
@@ -1856,6 +1948,8 @@ window.__fqStartApp = function () {
       <div className="row justify-between items-center"><h3>Paramètres (${ctx.mode === "demo" ? "démo" : "réel"})</h3><button className="iconbtn" onClick=${onClose} aria-label="Fermer"><${Ic} n="X" /></button></div>
       <p className="muted small">Garde-fous initiaux prudents, modifiables. Ce ne sont pas des seuils universellement optimaux.</p>
       <div className="filters">
+        <${Field} label="Bookmaker de référence" id="s-book" hint="cotes utilisées pour les choix et les tickets ; s'il n'a pas coté un match : médiane des bookmakers français, puis Bet 365"><select id="s-book" className="inp" value=${s.oddsBook || "winamax_fr"} onChange=${(e) => setS({ ...s, oddsBook: e.target.value })}>
+          ${Object.entries((FQ.ETL && FQ.ETL.FR_BOOKS) || {}).map(([k, v]) => html`<option key=${k} value=${k}>${v}</option>`)}</select><//>
         ${F("initialBankroll", "Capital de référence (unités)", "aucune bankroll réelle : 100 u par défaut", 1)}
         ${F("kellyFraction", "Kelly fractionné (%)", "25 % par défaut", 100)}
         ${F("maxStakePct", "Mise maximale (% bankroll)", "1 % par défaut", 100)}

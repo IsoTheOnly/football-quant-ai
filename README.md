@@ -35,7 +35,7 @@ La page produite est celle publiée sur claude.ai.
 
 ```bash
 npm install   # jsdom, React… pour le test de la page (hors CDN)
-npm test      # moteur, ETL, cotes, règlements, CLV, cycle complet, rendu de la page
+npm test      # moteur, ETL, cotes, règlements, CLV, tickets, couverture, intervalles, cycle complet, rendu de la page
 ```
 
 ## Exécuteur Node (tâche planifiée)
@@ -80,9 +80,26 @@ Les crédits (500 par mois, offre gratuite) sont répartis sur le mois, davantag
 
 ## Probabilités et apprentissage
 
-- Marge retirée par la méthode de la puissance (corrige le biais favori-outsider), choisie sur la log loss ; poids modèle / marché par compétition, gardé seulement s'il améliore la période de test.
-- Tickets : quatre niveaux (Sûr 1,4–1,8, Prudent 3–4, Équilibré 7–8, Audacieux 40–60), huit stratégies dont « Valeur » (espérance positive seulement) (favoris à 45 / 55 / 65 %, 1N2 chance max avec ou sans nul, combiné sécurisé multi-marchés ≥ 70 %, multi-marchés ≥ 50 %), rejouées sur l'historique puis suivies chaque semaine en « fantôme ». La stratégie jouée est celle dont le taux de réussite attendu (loi Bêta : semaines rejouées à demi-poids, semaines réelles en entier) est le plus élevé.
-- Audit de chaque semaine terminée : tickets, choix du modèle (réel vs attendu), log loss face au marché, CLV.
+Validation chronologique en trois périodes : apprentissage (01/07/2025 → 28/02/2026), validation (01/03 → 30/06/2026), test final (depuis le 01/07/2026).
+
+- La validation décide si un réglage est gardé : hyperparamètres par compétition, calibration, méthode de retrait de la marge, poids modèle / marché. Un réglage gardé est réajusté sur apprentissage + validation.
+- Le test final n'est utilisé pour aucun choix : il est seulement mesuré, avec intervalles de confiance (Wilson pour les taux de réussite, bootstrap pour les rendements et les écarts de log loss).
+- Sources séparées : chaque sélection garde la probabilité du marché sans marge, celle du modèle sportif seul et la probabilité retenue (mélange appris).
+
+## Tickets
+
+Quatre niveaux : Sûr 1,4–1,8, Prudent 3–4, Équilibré 7–8, Audacieux 40–60.
+
+- **Chance et profit ensemble** : à cote totale fixée, chance = produit des rendements des sélections (chance × cote) ÷ cote, et l'espérance suit le même produit. Le ticket garde les sélections où le bookmaker prélève le moins, avec le nombre de sélections qui donne la meilleure chance (comparé de 1 à 15), et à 10 % près le meilleur rendement.
+- **Prudence** : probabilité diminuée de κ × |modèle − marché| quand les deux sources divergent ; κ choisi sur le passé d'après le rendement réalisé des sélections.
+- **Stratégies** (favoris 45 / 55 / 65 %, chance max avec ou sans nul, sécurisé multi-marchés, multi-marchés, valeur) : chacune propose son ticket, suivi en fantôme. La stratégie jouée a la plus forte chance corrigée par son historique (tickets gagnés ÷ annoncés, semaines rejouées à demi-poids, rétréci vers 1). Cette procédure et l'autre (meilleur taux de réussite) sont rejouées semaine par semaine sans regarder l'avenir ; la meilleure sur le passé est retenue.
+- **Justification** de chaque sélection en clair (issue, marché / modèle, marge prélevée comparée aux autres sélections, contexte) et de chaque ticket (méthode, comparaison par nombre de sélections, autres stratégies, seuil de rentabilité).
+
+## Audit
+
+- Audit de chaque semaine terminée : tickets joués et fantômes, choix du modèle (réel vs attendu), log loss face au marché, CLV, paris saisis par Iso (réels et tests séparés).
+- Paris saisis : « test » (simulation, par défaut) ou « réel ». Les tests sont suivis et audités, mais n'entrent pas dans le bilan en euros.
+- Contrôle de couverture à chaque cycle : par compétition, matchs à venir sur 14 jours, analysés, avec cote ; résultats manquants, reports, doublons.
 - Réentraînement complet chaque semaine par la tâche planifiée.
 
 ## Cote de clôture (CLV)

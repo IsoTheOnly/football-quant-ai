@@ -105,21 +105,16 @@ ax.legend(frameon=False, fontsize=7.5, ncol=3, loc="upper center", bbox_to_ancho
 # 2. réussite des tickets vs cote, meilleure stratégie par niveau (46 semaines)
 levels = []
 for sc in T["tickets"]["scenarios"]:
-    best = None
-    for k, v in sc["arms"].items():
-        n = v["train"]["n"] + v["test"]["n"]
-        if n < 20:
-            continue
-        won = v["train"]["won"] + v["test"]["won"]; exp = v["train"]["expected"] + v["test"]["expected"]
-        odds = ((v["train"]["avgOdds"] or 0) * v["train"]["n"] + (v["test"]["avgOdds"] or 0) * v["test"]["n"]) / n
-        prof = v["train"]["profit"] + v["test"]["profit"]
-        r = {"sc": sc["label"], "arm": k, "n": n, "won": won, "exp": exp, "odds": odds, "roi": prof / n, "legs": v["train"]["avgLegs"]}
-        if not best or r["won"] / n > best["won"] / best["n"]:
-            best = r
-    levels.append(best)
+    # stratégie de départ (choisie sur le passé seulement) : passé + test final
+    k = sc["start"]; v = sc["arms"][k]
+    n = v["train"]["n"] + v["test"]["n"]
+    won = v["train"]["won"] + v["test"]["won"]; exp = v["train"]["expected"] + v["test"]["expected"]
+    odds = ((v["train"]["avgOdds"] or 0) * v["train"]["n"] + (v["test"]["avgOdds"] or 0) * v["test"]["n"]) / n
+    prof = v["train"]["profit"] + v["test"]["profit"]
+    levels.append({"sc": sc["label"], "arm": k, "n": n, "won": won, "exp": exp, "odds": odds, "roi": prof / n, "legs": v["train"]["avgLegs"], "past": v["train"], "test": v["test"], "bandit": sc["bandit"]})
 fig, ax = plt.subplots(figsize=(7.2, 3.0), dpi=200)
 xs = [l["odds"] for l in levels]
-ax.scatter(xs, [l["won"] / l["n"] for l in levels], s=60, color=C_ACC, zorder=3, label="Taux de réussite observé (meilleure stratégie)")
+ax.scatter(xs, [l["won"] / l["n"] for l in levels], s=60, color=C_ACC, zorder=3, label="Taux de réussite observé (stratégie de départ)")
 ax.scatter(xs, [l["exp"] / l["n"] for l in levels], s=30, marker="x", color=C_MKT, zorder=3, label="Taux annoncé par nos probabilités")
 import numpy as np
 g = np.linspace(1.3, 60, 300); ax.plot(g, 1 / g, color=C_MODEL, lw=1, label="1 / cote (équilibre sans marge)")
@@ -145,8 +140,9 @@ story += [P("Football Quant AI", "title"),
 story.append(box(
     "<b>En une phrase.</b> Football Quant AI est un outil personnel qui estime les probabilités des matchs de 13 compétitions de football, "
     "les compare aux cotes réelles des bookmakers français et construit chaque semaine des combinés suivis en « paper betting » (mises fictives). "
-    "<br/><br/><b>Verdict actuel.</b> Le système prédit correctement, mais il ne fait pas mieux que les bookmakers. Sur 792 matchs de test, "
-    f"sa log loss (mesure d'erreur, plus bas = mieux) est de {fr(S['test']['market']['llModel'],3)} contre {fr(S['test']['market']['ll'],3)} pour les cotes du marché. "
+    "<br/><br/><b>Verdict actuel.</b> Le système prédit correctement, mais il ne fait pas mieux que les bookmakers. Sur les "
+    f"{T['summary0']['testN']} matchs cotés du test final (jamais utilisés pour régler quoi que ce soit), sa log loss (mesure d'erreur, plus bas = mieux) est de {fr(T['summary0']['testLLFinal'],4)} contre {fr(T['summary0']['testMarketLL'],4)} pour les cotes du marché : "
+    f"écart {fr(T['summary0']['diffFinalVsMarket']['mean'],4)}, intervalle de confiance à 95 % de {fr(T['summary0']['diffFinalVsMarket']['ci'][0],4)} à {fr(T['summary0']['diffFinalVsMarket']['ci'][1],4)}. "
     "Il n'a donc pas d'avantage démontré. Comme les bookmakers français prennent une marge de 10 à 13 % sur chaque pari, toute stratégie sans avantage perd de l'argent sur la durée, "
     "et d'autant plus vite que les combinés sont longs. Le projet en est au stade d'un <b>outil d'aide à la décision honnête et mesuré</b>, pas d'une machine à gagner."))
 story.append(Spacer(1, 8))
@@ -182,21 +178,27 @@ story.append(table([
     ["openfootball (domaine public)", "Calendrier de la Super League suisse", "Complément du calendrier"],
     ["Saisie manuelle", "Cotes vues par l'utilisateur (dont cotes boostées), tickets réellement joués", "Marchés sans cote publique, apprentissage"],
 ], [42 * mm, 74 * mm, 54 * mm]))
-story.append(P(f"Volume d'entraînement : {S['trainPredictions']} matchs prédits entre juillet 2025 et juin 2026, puis {S['testPredictions']} matchs de test de juillet à mi-octobre 2026, sur 12 compétitions. "
+story.append(P(f"Volume : {S['learnPredictions']} matchs d'apprentissage (juillet 2025 → février 2026), {S['valPredictions']} de validation (mars → juin 2026) et {S['testPredictions']} de test final (juillet → mi-octobre 2026), sur 12 compétitions. "
                "Les cotes françaises historiques n'existent pas en libre accès : l'historique est rejoué avec les cotes Bet 365 abaissées du rapport mesuré entre les prix français et Bet 365 "
                f"({fr(T['tickets']['frFactor']['factor'],3)} sur {T['tickets']['frFactor']['n']} matchs comparables).", "small"))
 
 story.append(P("4. Comment le modèle estime une probabilité", "h1"))
-story.append(P("Le calcul se fait en quatre étages. Chacun n'est conservé que s'il améliore la prédiction sur des matchs que le modèle n'a pas vus."))
+story.append(P("Le calcul se fait en quatre étages. Chacun n'est conservé que s'il améliore la prédiction sur la période de validation, des matchs que l'apprentissage n'a pas vus."))
 story.append(P("Étage 1 · Modèle de buts (Poisson / Dixon-Coles)", "h2"))
 story.append(P("Chaque équipe reçoit une force d'attaque et de défense, plus un avantage du terrain par compétition. Elles sont estimées sur les matchs passés, les plus récents pesant davantage (demi-vie de 120 à 400 jours). "
                "Le rétrécissement ramène les équipes peu observées vers la moyenne, avec un a priori pour les promus. On en déduit le nombre de buts attendus de chaque équipe, puis la probabilité de chaque score : "
                "victoire, nul, défaite, les deux équipes marquent, plus/moins de 2,5 buts. La correction de Dixon-Coles ajuste les petits scores (0-0, 1-0, 1-1). Les hyperparamètres sont réglés par compétition sur 12 configurations testées."))
 story.append(P("Étage 2 · Calibration", "h2"))
-story.append(P(f"Une température (1N2 : {fr(T['calibration']['T1N2'],2)}) et une correction de Platt (BTTS) recalent les probabilités : quand le modèle annonce 60 %, l'événement doit arriver environ 6 fois sur 10."))
+C1 = T["calibration"]
+story.append(P(f"Une température (1N2) et une correction de Platt (BTTS) recalent les probabilités : quand le modèle annonce 60 %, l'événement doit arriver environ 6 fois sur 10. "
+               f"Sur la validation, la température 1N2 apprise ({fr(C1['detail1N2']['Ttrain'],2)}) {'améliorait' if C1['detail1N2']['accepted'] else 'n’améliorait pas'} la prédiction : {'gardée' if C1['detail1N2']['accepted'] else 'elle est donc laissée à 1 (pas de correction)'}. "
+               f"La correction BTTS est {'gardée' if C1['bttsAB'] else 'rejetée'}."))
 story.append(P("Étage 3 · Mélange avec le marché", "h2"))
-story.append(P(f"Les cotes sont converties en probabilités en retirant la marge. La méthode « puissance » retire davantage de marge sur les outsiders (biais favori-outsider) ; elle a été retenue car meilleure en test ({fr(B['devigDetail']['testPower'],4)} contre {fr(B['devigDetail']['testNorm'],4)}). "
-               f"Le poids du modèle dans le mélange est appris : 0 % en général, {', '.join(f'{int(100*w)} % en {COMP[c]}' for c, w in B['byComp'].items())}, car c'est là seulement qu'il améliore le test. "
+DV = B["devigDetail"]
+story.append(P(f"Les cotes sont converties en probabilités en retirant la marge. Deux méthodes : à parts égales, ou « puissance », qui retire davantage de marge sur les outsiders (biais favori-outsider). "
+               f"La puissance était meilleure sur l'apprentissage ({fr(DV['trainPower'],4)} contre {fr(DV['trainNorm'],4)}) mais pas sur la validation ({fr(DV['valPower'],4)} contre {fr(DV['valNorm'],4)}) : la règle retient donc « {'puissance' if B['devig'] == 'power' else 'parts égales'} ». "
+               f"Sur le test final, la puissance aurait été un peu meilleure ({fr(DV['testPower'],4)} contre {fr(DV['testNorm'],4)}) ; la règle n'en tient volontairement pas compte, sinon le test ne serait plus un test. "
+               f"Le poids du modèle dans le mélange est appris : {int(100*B['w'])} % en général, {', '.join(f'{int(100*w)} % en {COMP[c]}' for c, w in B['byComp'].items())}, car c'est là seulement que la validation l'a justifié. "
                f"Pour les buts (±2,5), le marché seul est meilleur que le modèle ({fr(BG['testMarketLL'],4)} contre {fr(BG['testModelLL'],4)}) : poids 0 %."))
 story.append(P("Étage 4 · Fiabilité et joueurs", "h2"))
 story.append(P("Un score de fiabilité (0–100) tient compte du nombre de matchs observés, des résultats manquants et de la fraîcheur des données. Il exclut les matchs douteux des tickets. "
@@ -205,7 +207,9 @@ story.append(P("Un score de fiabilité (0–100) tient compte du nombre de match
 story.append(P("5. Protocole de validation (sans tricher)", "h1"))
 story += bullets([
     "Validation chronologique : pour prédire un match, le modèle n'utilise que les matchs joués avant. Aucune information du futur.",
-    "Apprentissage du 1er juillet 2025 au 30 juin 2026, test du 1er juillet 2026 à aujourd'hui. Le test ne sert à régler aucun paramètre : il sert à accepter ou refuser un réglage.",
+    "Trois périodes. Apprentissage (1er juillet 2025 → 28 février 2026) : le modèle ajuste ses paramètres. Validation (1er mars → 30 juin 2026) : elle décide si un réglage est gardé. Test final (depuis le 1er juillet 2026) : il est seulement mesuré et ne sert à aucun choix.",
+    "Un réglage gardé est réajusté sur apprentissage + validation avant d'être mesuré sur le test.",
+    "Intervalles de confiance à 95 % : Wilson pour les taux de réussite, bootstrap pour les rendements et les écarts de log loss. Avec 8 semaines de test, la plupart des intervalles sont très larges : aucune conclusion de rentabilité n'est possible.",
     "Comparaisons systématiques avec deux références : les fréquences naïves (domicile/nul/extérieur) et les cotes du marché.",
     "Tickets rejoués semaine par semaine (jeudi → dimanche), comme en direct, avec les cotes d'avant-match.",
     "Réentraînement complet chaque semaine sur les nouvelles données, par la tâche planifiée."])
@@ -216,14 +220,26 @@ story.append(table([
     ["Étape", "Ce qui se passe"],
     ["Deux fois par jour (6 h 54 et 18 h 54)", "Une tâche planifiée récupère le code sur GitHub, télécharge ESPN, football-data et The Odds API (dans la limite des crédits du mois), intègre les résultats, recalcule les pronostics et les tickets, règle les paris terminés, mesure la CLV et écrit le tout dans la base de la page."],
     ["Choix par match", "Pour chaque match des 14 jours : l'issue retenue (pari à espérance positive s'il en existe, sinon l'issue la plus probable), sa probabilité, la cote disponible et sa source, la justification. Le tableau « Cotes et seuils » donne, pour chaque sélection (1N2, double chance, BTTS, ±2,5, buteurs, joueur décisif), la cote juste, la cote minimale intéressante (espérance ≥ 3 %) et un champ pour saisir la cote vue, même boostée."],
-    ["Tickets hebdomadaires", "Quatre niveaux : Sûr (1,4–1,8), Prudent (3–4), Équilibré (7–8), Audacieux (40–60). Huit stratégies de construction sont suivies chaque semaine. Le ticket joué (fictivement, 1 unité) vient de la stratégie au meilleur taux de réussite attendu. Chaque ticket est chiffré chez le bookmaker français qui le paie le mieux, avec son espérance et la cote totale à partir de laquelle il deviendrait rentable."],
-    ["Paris réels", "Bouton « Mon ticket » : recherche du match, marché (1N2, double chance, gagne ou 2 buts d'avance, BTTS, buts, buteur, autre), cote obtenue, mise. Règlement automatique. Les cotes réelles saisies servent aussi à corriger les estimations."],
+    ["Tickets hebdomadaires", "Quatre niveaux : Sûr (1,4–1,8), Prudent (3–4), Équilibré (7–8), Audacieux (40–60). Huit stratégies proposent chacune leur meilleur ticket (voir partie 6 bis) ; le ticket joué (fictivement, 1 unité) est celui de la stratégie à la meilleure chance corrigée par son historique. Chaque ticket est chiffré chez le bookmaker français qui le paie le mieux, avec la comparaison par nombre de sélections, les autres stratégies, son espérance et la cote totale à partir de laquelle il deviendrait rentable."],
+    ["Mes tickets (tests et réels)", "Bouton « Mon ticket » : recherche du match, marché (1N2, double chance, gagne ou 2 buts d'avance, BTTS, buts, buteur, autre), cote obtenue, mise, et le type : test (simulation, par défaut) ou joué pour de vrai. Les deux sont réglés et audités ; seuls les paris réels entrent dans le bilan en euros. Les cotes saisies servent aussi à corriger les estimations."],
+    ["Contrôle de couverture", "À chaque cycle, par compétition : matchs à venir sur 14 jours, analysés, avec cote ; résultats manquants, reports, doublons. Les anomalies sont listées dans Automatique › Détails."],
     ["Chaque jeudi 19 h 12", "Notification avec les tickets de la semaine."],
     ["Chaque lundi", "Audit de la semaine écoulée : tickets joués et fantômes, réussite observée contre attendue, log loss face au marché, CLV. Mise à jour du choix de stratégie."],
 ], [42 * mm, 128 * mm]))
 story.append(Spacer(1, 4))
-story.append(P("Apprentissage par renforcement des tickets. Chaque stratégie est un « bras » d'un bandit à information complète. Son taux de réussite suit une loi Bêta : les semaines rejouées comptent à moitié, les semaines réelles en entier. "
-               "Comme toutes les stratégies sont réglées chaque semaine (tickets fantômes), on apprend sur toutes à la fois. Une stratégie sans au moins 5 semaines de données n'est jamais choisie.", "small"))
+TK = T["tickets"]; CD = TK["choiceDetail"]
+story.append(P("6 bis. Construire un ticket : chance et profit ensemble", "h1"))
+story.append(P("Pour une cote totale C donnée, la chance qu'un combiné passe vaut le produit des « rendements » de ses sélections (chance × cote ; 1 = prix juste) divisé par C, et son espérance vaut ce même produit moins 1. "
+               "Chance et profit montent donc ensemble : il faut les sélections où le bookmaker prélève le moins, et le moins de sélections possible, car chacune ajoute sa marge. "
+               "Le constructeur compare, pour chaque ticket, le meilleur ticket possible avec 1, 2, 3… jusqu'à 15 sélections (affiché sous forme de barres), garde la meilleure chance et, à 10 % près, le meilleur rendement."))
+story += bullets([
+    f"Prudence : quand notre modèle et le marché ne sont pas d'accord sur une sélection, sa chance est diminuée de κ × l'écart pour construire le ticket. κ = {fr(TK['kappa'],1)} a été choisi sur le passé (rendement réalisé des sélections). "
+    f"Sur le test final, mesuré après coup, les stratégies ont gagné {next(x['testWon'] for x in TK['kappaGrid'] if x['kappa'] == TK['kappa'])} tickets sur {next(x['testN'] for x in TK['kappaGrid'] if x['kappa'] == TK['kappa'])} avec cette prudence, contre {next(x['testWon'] for x in TK['kappaGrid'] if x['kappa'] == 0)} sur {next(x['testN'] for x in TK['kappaGrid'] if x['kappa'] == 0)} sans.",
+    "Chaque stratégie (favoris à 45, 55 ou 65 %, chance maximale avec ou sans nul, sécurisé multi-marchés, multi-marchés, valeur) propose son ticket, suivi chaque semaine en « fantôme ».",
+    "Correction apprise : pour chaque stratégie, tickets gagnés ÷ tickets annoncés (semaines rejouées comptées à moitié, semaines réelles en entier), rétréci vers 1 tant que l'historique est court. Les tickets de favoris passent par exemple plus souvent qu'annoncé (biais favori-outsider).",
+    f"Choix de la stratégie jouée : la meilleure chance corrigée de la semaine. Rejouée semaine par semaine sans regarder l'avenir, cette règle a gagné {CD['corrected']['past']} tickets sur {CD['nPast']} sur le passé, contre {CD['hitrate']['past']} pour la règle « meilleur taux de réussite » : écart dans le bruit. "
+    "Elle est retenue parce qu'elle suit la chance réelle du ticket de la semaine (l'autre règle pouvait jouer un ticket deux fois moins probable qu'une alternative).",
+    "Chaque sélection est justifiée en clair : l'issue, la chance selon le marché et selon notre modèle, la marge prélevée comparée aux autres sélections de la semaine, le contexte (classement, forme, buts attendus)."])
 
 story.append(P("7. Résultats actuels", "h1"))
 story.append(P("7.1 Qualité des probabilités", "h2"))
@@ -239,16 +255,18 @@ for m in POL["modelOnly"]:
 story.append(KeepTogether([h72, table(rows, [28 * mm, 22 * mm, 32 * mm, 26 * mm, 30 * mm, 32 * mm])]))
 story.append(P("Quand le modèle seul juge une cote trop haute, parier dessus perd de l'argent dans toutes les configurations testées : ses « bonnes affaires » sont surtout ses erreurs. "
                "Les paris automatiques sont donc désactivés, et resteront suspendus tant qu'aucune politique n'est rentable sur l'apprentissage puis confirmée en test.", "small"))
-story.append(P("7.3 Tickets combinés (46 semaines rejouées)", "h2"))
-rows = [["Niveau", "Stratégie la plus gagnante", "Sél. moy.", "Gagnés", "Réussite", "Annoncé", "Rendement"]]
+h73 = P("7.3 Tickets combinés rejoués semaine par semaine", "h2")
+ci = lambda c: f"{pc(c[0])}–{pc(c[1])}" if c else "—"
+rows = [["Niveau", "Stratégie de départ (choisie sur le passé)", "Passé gagnés", "Test final gagnés (IC 95 %)", "Rendement test", "Choix semaine par semaine, test"]]
 for l in levels:
-    rows.append([l["sc"], ARM.get(l["arm"], l["arm"]), fr(l["legs"] or 0, 1), f"{l['won']}/{l['n']}", pc(l["won"] / l["n"]), pc(l["exp"] / l["n"]), pc(l["roi"], 1)])
-story.append(table(rows, [22 * mm, 46 * mm, 20 * mm, 18 * mm, 18 * mm, 20 * mm, 26 * mm]))
+    b = l["bandit"]
+    rows.append([l["sc"], ARM.get(l["arm"], l["arm"]), f"{l['past']['won']}/{l['past']['n']}", f"{l['test']['won']}/{l['test']['n']} ({ci(l['test'].get('hitCI'))})", pc(l["test"]["roi"]), f"{b['won']}/{b['n']} ({ci(b.get('hitCI'))})"])
+story.append(KeepTogether([h73, table(rows, [20 * mm, 44 * mm, 20 * mm, 32 * mm, 22 * mm, 32 * mm])]))
 story.append(Spacer(1, 3))
 story.append(Image(str(FIG / "tickets.png"), width=170 * mm, height=70.8 * mm))
 story.append(P("La réussite d'un ticket est dictée par sa cote : elle suit de près 1/cote, un peu en dessous à cause de la marge. Un ticket qui gagne plus de 60 % du temps a forcément une cote d'environ 1,6 ou moins. "
-               "Le niveau Sûr y parvient (65 à 76 % selon la stratégie) avec un rendement proche de zéro sur 46 semaines. Les tickets de 9 à 13 favoris pour une cote de 40 à 60 n'ont gagné aucune des 38 semaines où ils étaient constructibles. "
-               "Les rendements des niveaux à grosse cote reposent sur 2 à 6 tickets gagnés : ils relèvent surtout du hasard et ne prouvent rien.", "small"))
+               "Le niveau Sûr y parvient (65 à 80 % selon la stratégie). Les longs tickets de favoris pour une cote de 40 à 60 n'ont presque jamais gagné. "
+               "Le test final ne compte que 8 semaines : les intervalles de confiance vont souvent de 0 à 40 %, et un ticket gagné de plus change le rendement de dizaines de points. Aucune conclusion de rentabilité n'est possible.", "small"))
 story.append(KeepTogether([P("7.4 Ce que coûte la marge", "h2"), Image(str(FIG / "marge.png"), width=170 * mm, height=61.4 * mm)]))
 story.append(P("Mesuré le 16/10/2026 sur 123 matchs : marge 1N2 de Winamax 12,9 %, Unibet 12,5 %, PMU 11,5 %, Betclic 11,3 %, NetBet 10,4 %, contre 6,3 % chez Bet 365. "
                "Même en prenant le meilleur prix des cinq bookmakers français, l'espérance médiane d'une sélection est de −8,7 %. Seules 3 sélections sur 369 étaient positives. Dans un combiné, ces pertes se multiplient.", "small"))
@@ -257,6 +275,7 @@ story.append(box("<b>Pourquoi on ne peut pas, aujourd'hui, avoir à la fois une 
                  "Elle ne devient positive que si notre p est meilleur que celui du marché (un avantage d'information ou de modèle), ou si la cote est meilleure que la normale (cote boostée, promotion, meilleur prix). "
                  "La logique actuelle cherche donc ces deux sources et affiche, pour chaque ticket, la cote totale à partir de laquelle il deviendrait rentable.", NEG))
 
+story.append(PageBreak())
 story.append(P("8. Hypothèses", "h1"))
 story += bullets([
     "Les buts suivent une loi de Poisson corrigée (Dixon-Coles) ; les matchs d'un même ticket sont indépendants.",
@@ -281,16 +300,30 @@ story.append(table([
     ["Piste", "Pourquoi", "Coût / effort"],
     ["Chasser les cotes boostées et promotions", "Seule source d'espérance positive accessible sans avantage de modèle. Saisir la cote boostée dans le tableau « Cotes et seuils » donne immédiatement l'espérance.", "Faible : la saisie est en place"],
     ["Paris simples ou combinés courts plutôt que longs", "La marge se multiplie à chaque sélection : 3 sélections ≈ −24 %, 13 ≈ −69 % au prix français médian.", "Nul"],
-    ["Référence « sharp » (Pinnacle, Betfair) via l'offre payante de The Odds API", "Comparer le meilleur prix français à la cote juste Pinnacle identifie les vraies anomalies de prix. C'est la méthode de value betting la plus éprouvée.", "30 $/mois (20 000 crédits)"],
-    ["Ajouter l'information que le marché intègre", "Compositions probables, absences, xG, repos et rotations : sources payantes ou collecte de presse.", "Élevé"],
+    ["Référence « sharp » (Pinnacle, Betfair)", "Comparer le meilleur prix français à la cote juste Pinnacle identifie les vraies anomalies de prix. C'est la méthode de value betting la plus éprouvée.", "Payant (≈ 30 $/mois) : exclu tant que le budget est de 0 €"],
+    ["Ajouter l'information que le marché intègre", "Compositions probables, absences, xG, repos et rotations : sources gratuites et légales à trouver ; chaque ajout n'est gardé que s'il améliore la validation.", "Élevé"],
     ["Suivre la CLV de chaque choix", "Indicateur d'avantage bien plus rapide que le rendement : plusieurs centaines de paris suffisent.", "En place, à observer"],
     ["Allonger l'historique", "Plus de saisons pour l'entraînement et les rejeux : des estimations plus stables.", "Moyen"],
     ["Discipline de mise", "Mises fixes ou Kelly fractionné ; jamais de mise pour se refaire.", "Nul"],
 ], [48 * mm, 82 * mm, 40 * mm]))
 
-story.append(P("11. Architecture technique", "h1"))
+story.append(P("11. Revue externe : où en est chaque recommandation", "h1"))
+story.append(table([
+    ["Recommandation", "État", "Ce qui a été fait / limite"],
+    ["Séparer apprentissage, validation, test final", "Fait", "Trois périodes ; le test final ne sert à aucun choix (ni réglage, ni stratégie, ni prudence)."],
+    ["Séparer modèle sportif et marché", "Fait", "Chaque sélection affiche marché sans marge, modèle seul et probabilité retenue ; log loss de chacun sur le test, avec IC."],
+    ["Drivers gratuits (xG, blessures, compositions)", "Partiel", "Pas de source gratuite et légale fiable pour 13 compétitions ; à rechercher, et à n'activer que s'ils améliorent la validation."],
+    ["Auditer les stratégies sans biais de sélection", "Fait", "Stratégie de départ choisie sur le passé ; le choix semaine par semaine est rejoué sans regarder l'avenir et mesuré sur le test."],
+    ["Contrôle automatique des 14 jours", "Fait", "Couverture par compétition à chaque cycle : analysés, cotes, résultats manquants, reports, doublons."],
+    ["Mesurer l'incertitude", "Fait", "Wilson (taux), bootstrap (rendements, écarts de log loss)."],
+    ["Paris réels sous contrôle manuel, tests séparés", "Fait", "Paris automatiques désactivés ; tickets saisis en « test » ou « réel », bilans séparés, tous audités."],
+    ["Historique immuable des prédictions", "Partiel", "La dernière prédiction avant le coup d'envoi est figée et conservée ; les versions intermédiaires ne sont pas gardées."],
+    ["Budget 0 €", "Respecté", "Offre gratuite The Odds API ; aucune source payante utilisée."],
+], [52 * mm, 20 * mm, 98 * mm]))
+
+story.append(P("12. Architecture technique", "h1"))
 story.append(P("Le code est sur GitHub (dépôt privé IsoTheOnly/football-quant-ai). La page est un fichier HTML autonome (React), publiée comme artefact Claude ; sa base de données partagée stocke l'état. "
-               "Un exécuteur Node (src/runner.js) fait tourner le même moteur que la page. 25 tests automatiques couvrent le moteur, les données, les cotes, les règlements, la CLV, un cycle complet et le rendu de la page. "
+               "Un exécuteur Node (src/runner.js) fait tourner le même moteur que la page. 30 tests automatiques couvrent le moteur, les données, les cotes, les règlements, la CLV, un cycle complet et le rendu de la page. "
                "Fichiers principaux : src/engine.js (modèle), src/etl2.js (données), src/train2.js (entraînement), src/autopilot.js (pronostics, tickets, apprentissage), src/app.js (interface).", "small"))
 story.append(Spacer(1, 6))
 story.append(P("Avertissement : outil personnel d'aide à la décision. Aucune rentabilité n'est garantie ; ne pariez que ce que vous pouvez perdre. Aide : joueurs-info-service.fr — 09 74 75 13 13.", "small"))

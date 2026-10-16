@@ -60,17 +60,21 @@ if (CMD === "summary") {
   const lines = [`Tickets de la semaine (${win.from} → ${win.to}) :`];
   if (!tks.length) lines.push("- aucun ticket construit pour l'instant (pas assez de matchs avec cotes réelles).");
   for (const t of tks) {
-    lines.push(`- ${t.label} : cote ${fr(t.totalOdds)}, chance estimée ${fr(100 * t.pJoint, 1)} % (${t.status === "EN ATTENTE" ? (t.frozen ? "en cours" : "modifiable jusqu'au 1er coup d'envoi") : t.status.toLowerCase()})`);
+    lines.push(`- ${t.label} : ${t.legs.length} sélection(s), cote ${fr(t.totalOdds)} chez ${t.bookName || "—"}, chance estimée ${fr(100 * t.pJoint, 1)} % (${t.status === "EN ATTENTE" ? (t.frozen ? "en cours" : "modifiable jusqu'au 1er coup d'envoi") : t.status.toLowerCase()})`);
+    if (Array.isArray(t.byN) && t.byN.length > 1) lines.push(`    chance selon le nombre de sélections : ${t.byN.map((x) => `${x.n} → ${fr(100 * x.p, 1)} %`).join(", ")}`);
     for (const l of t.legs) lines.push(`    · ${l.date} ${l.home} – ${l.away} : ${l.label} @ ${fr(l.odds)} (${(l.oddsSrc || "").split(" · ")[0]})`);
   }
   const stats = (list) => { const d = list.filter((t) => t.status === "GAGNÉ" || t.status === "PERDU"); const p = d.reduce((a, t) => a + (t.profit || 0), 0); const st = d.reduce((a, t) => a + (t.stake || 0), 0); return { n: d.length, won: d.filter((t) => t.status === "GAGNÉ").length, profit: p, roi: st ? p / st : null }; };
   const clvAvg = (list) => { const v = list.map((t) => t.clv && t.clv.ev).filter(Number.isFinite); return v.length ? { n: v.length, ev: v.reduce((a, x) => a + x, 0) / v.length, beat: v.filter((x) => x > 0).length } : null; };
-  const ps = stats(state.paperTickets || []), rs = stats(state.realBets || []);
+  const realL = (state.realBets || []).filter(FQ.P.isRealBet), testL = (state.realBets || []).filter((b) => !FQ.P.isRealBet(b));
+  const ps = stats(state.paperTickets || []), rs = stats(realL), ts = stats(testL);
   lines.push(`Paper betting : ${ps.won}/${ps.n} tickets gagnés, ${sg(ps.profit, "u")}.`);
-  if ((state.realBets || []).length) lines.push(`Paris réels : ${rs.won}/${rs.n} gagnés, ${sg(rs.profit, "€")}.`);
+  if (realL.length) lines.push(`Paris réels : ${rs.won}/${rs.n} gagnés, ${sg(rs.profit, "€")}.`);
+  if (testL.length) lines.push(`Tes tickets de test (pas joués) : ${ts.won}/${ts.n} gagnés, ${sg(ts.profit, "€")} fictifs.`);
+  if (state.coverage && state.coverage.nIssues) lines.push(`Couverture 14 jours : ${state.coverage.nIssues} point(s) à vérifier (${[...new Set(state.coverage.issues.map((x) => x.kind))].join(", ")}).`);
   const picks = (state.picks || []).filter((p) => p.status === "GAGNÉ" || p.status === "PERDU");
   if (picks.length) lines.push(`Choix du modèle : ${picks.filter((p) => p.status === "GAGNÉ").length}/${picks.length} justes.`);
-  for (const [lab, list] of [["choix", state.picks || []], ["tickets paper", state.paperTickets || []], ["paris réels", state.realBets || []]]) {
+  for (const [lab, list] of [["choix", state.picks || []], ["tickets paper", state.paperTickets || []], ["paris réels", realL], ["tests", testL]]) {
     const c = clvAvg(list); if (c) lines.push(`Cote de clôture (${lab}) : ${c.beat}/${c.n} au-dessus, espérance moyenne à la clôture ${sg(100 * c.ev, "%")}.`);
   }
   console.log(lines.join("\n"));

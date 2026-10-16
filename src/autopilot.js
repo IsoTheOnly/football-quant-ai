@@ -496,15 +496,28 @@
    * où la marge du bookmaker est la plus faible (ou l'avis du modèle le plus favorable) passent en premier.
    * cands : [{ matchId, p, odds, agree?, ... }] ; opt.agree : n'utiliser que les sélections où le modèle seul est au moins aussi optimiste que le marché.
    */
+  /*
+   * Objectif : chance de gain ET profit. À cote totale fixée O, chance = Π(p × cote) / O et espérance = Π(p × cote) − 1 :
+   * les deux montent ensemble avec le « rendement » des sélections (p × cote, 1 = prix juste). On garde donc les sélections
+   * où le bookmaker prélève le moins, et le nombre de sélections qui donne la meilleure chance (souvent peu : chaque sélection
+   * ajoute sa marge), puis, parmi les tickets dont la chance est à moins de opt.tol (10 %) de la meilleure, celui qui rapporte le plus.
+   * Probabilité prudente c.pR (si fournie) : probabilité diminuée quand modèle et marché ne sont pas d'accord ; elle sert au choix,
+   * la chance affichée reste celle de la probabilité retenue c.p.
+   * Retour : byN = meilleur ticket trouvé pour chaque nombre de sélections (pour comparer 3, 4, 7, 10 sélections…).
+   */
   function buildTicket(cands, sc, opt) {
     const o = opt || {};
     const LO = Math.log(sc.lo), HI = Math.log(sc.hi);
     const boost = typeof o.boost === "function" ? o.boost : () => 0; // bonus de cote selon le nombre de sélections (Multiboost)
     const lb = (lo, n) => lo + Math.log(1 + boost(n));
     const pool = cands.filter((c) => U.isNum(c.odds) && c.odds >= 1.05 && c.odds <= sc.maxLegOdds && U.isNum(c.p) && c.p > 0.04 && (!o.agree || c.agree))
-      .map((c) => ({ c, lo: Math.log(c.odds), lp: Math.log(c.p) }))
-      .sort((a, b) => b.lp + b.lo - (a.lp + a.lo) || b.lp - a.lp).slice(0, o.pool || 160);
-    let beam = [{ idx: [], last: -1, lo: 0, lp: 0 }], best = null;
+      .map((c) => ({ c, lo: Math.log(c.odds), lp: Math.log(c.p), lr: Math.log(U.isNum(c.pR) && c.pR > 0 ? Math.min(c.p, c.pR) : c.p) }))
+      .sort((a, b) => b.lr + b.lo - (a.lr + a.lo) || b.lr - a.lr).slice(0, o.pool || 160);
+    const ev = o.objective === "ev";
+    const key = (z) => (ev ? z.lr + z.lo + Math.log(1 + boost(z.idx.length)) : z.lr); // chance prudente (défaut) ou espérance prudente
+    const tol = U.isNum(o.tol) ? o.tol : 0.1;
+    let beam = [{ idx: [], last: -1, lo: 0, lp: 0, lr: 0 }];
+    const top = [], byN = {};
     for (let d = 0; d < sc.maxLegs && beam.length; d++) {
       const next = [];
       for (const st of beam) {
@@ -513,20 +526,26 @@
           if (st.idx.some((j) => pool[j].c.matchId === x.c.matchId)) continue;
           const lo = st.lo + x.lo, n = st.idx.length + 1, b = lb(lo, n);
           if (b > HI + 1e-9) continue;
-          const ns = { idx: st.idx.concat([i]), last: i, lo, lp: st.lp + x.lp };
+          const ns = { idx: st.idx.concat([i]), last: i, lo, lp: st.lp + x.lp, lr: st.lr + x.lr };
           // dans la fourchette : candidat (ajouter une sélection ne ferait que baisser la chance de gain)
-          const key = (z) => (o.objective === "ev" ? z.lp + z.lo : z.lp); // chance de gain (défaut) ou espérance (p × cote)
-          if (b >= LO - 1e-9) { if (!best || key(ns) > key(best) + 1e-12 || (Math.abs(key(ns) - key(best)) < 1e-12 && ns.idx.length < best.idx.length)) best = ns; }
-          else next.push(ns);
+          if (b >= LO - 1e-9) {
+            if (!byN[n] || key(ns) > key(byN[n])) byN[n] = ns;
+            top.push(ns); if (top.length > 400) { top.sort((a, c) => key(c) - key(a)); top.length = 60; }
+          } else next.push(ns);
         }
       }
-      next.sort((a, b) => b.lp + b.lo - (a.lp + a.lo));
+      next.sort((a, b) => b.lr + b.lo - (a.lr + a.lo));
       beam = next.slice(0, o.beam || 500);
     }
-    if (!best) return null;
+    if (!top.length) return null;
+    top.sort((a, c) => key(c) - key(a) || a.idx.length - c.idx.length);
+    // chance (prudente) maximale ; à chance quasi égale (écart < tol), le ticket qui rapporte le plus
+    const evOf = (z) => z.lr + z.lo + Math.log(1 + boost(z.idx.length));
+    const near = ev ? [top[0]] : top.filter((z) => z.lr >= top[0].lr + Math.log(1 - tol));
+    const best = near.reduce((a, z) => (evOf(z) > evOf(a) + 1e-12 ? z : a), near[0]);
+    const pack = (z) => { const raw = Math.exp(z.lo), bonus = boost(z.idx.length), tot = raw * (1 + bonus), p = Math.exp(z.lp); return { n: z.idx.length, totalOdds: tot, rawOdds: raw, boost: bonus, pJoint: p, pRobust: Math.exp(z.lr), ev: p * tot - 1 }; };
     const legs = best.idx.map((j) => pool[j].c).sort((a, b) => ((a.kickoff || a.date) < (b.kickoff || b.date) ? -1 : 1));
-    const raw = Math.exp(best.lo), bonus = boost(legs.length), totalOdds = raw * (1 + bonus), pJoint = Math.exp(best.lp);
-    return { legs, totalOdds, rawOdds: raw, boost: bonus, pJoint, ev: pJoint * totalOdds - 1 };
+    return Object.assign(pack(best), { legs, byN: Object.keys(byN).map(Number).sort((a, b) => a - b).map((n) => pack(byN[n])) });
   }
 
   /**
@@ -599,26 +618,73 @@
     if (U.isNum(mk.over25)) out.push(["Buts", "+2.5", "Plus de 2,5 buts", mk.over25], ["Buts", "-2.5", "Moins de 2,5 buts", 1 - mk.over25]);
     return out;
   }
-  /** Justification d'une sélection : probabilités (nous / marché / modèle), cote et source, classement, forme, buts attendus */
-  function legWhy(pr, m, market, sel, p, odds, src) {
-    const st = pr.standings, f = pr.form || {};
-    const parts = [];
+  /**
+   * Probabilités séparées d'une sélection : marché sans marge (mk) et modèle sportif seul (mo), quand elles existent.
+   * La probabilité retenue p est leur mélange (poids appris) : c'est elle qui sert aux tickets.
+   */
+  function legProbs(pr, market, sel) {
     let mk = null, mo = null;
     if (market === "1N2" || market === "DC") {
-      const idx = { 1: [0], N: [1], 2: [2], "1N": [0, 1], 12: [0, 2], N2: [1, 2] }[sel];
+      const idx = { 1: [0], N: [1], 2: [2], "1N": [0, 1], 12: [0, 2], N2: [1, 2] }[sel] || [];
       if (pr.blend && pr.blend.market) mk = idx.reduce((x, i) => x + pr.blend.market[i], 0);
-      if (pr.modelMarkets) mo = idx.reduce((x, i) => x + [pr.modelMarkets.p1, pr.modelMarkets.pN, pr.modelMarkets.p2][i], 0);
+      const mm = pr.modelMarkets;
+      if (mm) mo = idx.reduce((x, i) => x + [mm.p1, mm.pN, mm.p2][i], 0);
     } else if (market === "Buts" && pr.goalsBlend && U.isNum(pr.goalsBlend.over)) { mk = sel === "+2.5" ? pr.goalsBlend.over : 1 - pr.goalsBlend.over; mo = sel === "+2.5" ? pr.goalsBlend.overModel : 1 - pr.goalsBlend.overModel; }
     else if (market === "BTTS" && pr.goalsBlend && U.isNum(pr.goalsBlend.btts)) { mk = sel === "Oui" ? pr.goalsBlend.btts : 1 - pr.goalsBlend.btts; mo = sel === "Oui" ? pr.goalsBlend.bttsModel : 1 - pr.goalsBlend.bttsModel; }
-    parts.push(`${pc(p)} estimé` + (mk !== null ? ` (marché sans marge ${pc(mk)}${mo !== null ? `, modèle ${pc(mo)}` : ""})` : ""));
-    if (st && st.home && st.away) parts.push(`${m.home} ${st.home.pos}e (${st.home.pts} pts) – ${m.away} ${st.away.pos}e (${st.away.pts} pts)`);
-    if (f.h || f.a) parts.push(`forme ${f.h || "—"} / ${f.a || "—"}`);
-    if (U.isNum(pr.lambdaHome)) parts.push(`buts attendus ${pr.lambdaHome.toFixed(1).replace(".", ",")}–${pr.lambdaAway.toFixed(1).replace(".", ",")}`);
-    parts.push(`cote ${String(odds).replace(".", ",")} (${String(src || "").split(" · relevée")[0]})`);
-    return parts.join(" · ");
+    return { mk: U.isNum(mk) ? mk : null, mo: U.isNum(mo) ? mo : null };
+  }
+  /**
+   * Probabilité prudente : p − κ × |modèle − marché|. Quand les deux sources divergent, la probabilité est moins sûre :
+   * le ticket préfère les sélections où elles s'accordent. Buteur / joueur décisif (modèle seul, sans marché) : incertitude 25 % de p.
+   * κ est choisi sur l'historique (apprentissage + validation), jamais sur le test final.
+   */
+  function robustP(p, q, market, kappa) {
+    if (!U.isNum(p)) return p;
+    const k = U.isNum(kappa) ? kappa : 0;
+    const u = q && U.isNum(q.mk) && U.isNum(q.mo) ? Math.abs(q.mo - q.mk) : market === "Buteur" || market === "Joueur Décisif" ? 0.25 * p : 0;
+    return Math.max(0.01, p - k * u);
+  }
+  const trainedKappa = () => { const t = FQ.TRAINED && FQ.TRAINED.tickets; return t && U.isNum(t.kappa) ? t.kappa : 0; };
+  const f2 = (x, d) => (U.isNum(x) ? x.toFixed(d === undefined ? 2 : d).replace(".", ",") : "—");
+  /** Phrase simple décrivant l'issue jouée */
+  function selPhrase(m, market, sel) {
+    if (market === "1N2") return sel === "N" ? `Match nul entre ${m.home} et ${m.away}` : sel === "1" ? `${m.home} gagne à domicile contre ${m.away}` : `${m.away} gagne à l'extérieur chez ${m.home}`;
+    if (market === "DC") return sel === "1N" ? `${m.home} ne perd pas contre ${m.away}` : sel === "N2" ? `${m.away} ne perd pas chez ${m.home}` : `Pas de match nul entre ${m.home} et ${m.away}`;
+    if (market === "BTTS") return sel === "Oui" ? `${m.home} et ${m.away} marquent tous les deux` : `${m.home} ou ${m.away} ne marque pas`;
+    if (market === "Buts") return `${sel[0] === "+" ? "Plus" : "Moins"} de ${sel.slice(1).replace(".", ",")} buts dans ${m.home} – ${m.away}`;
+    if (market === "Buteur") return `${sel} marque pendant ${m.home} – ${m.away}`;
+    if (market === "Joueur Décisif") return `${sel} marque ou fait une passe décisive (${m.home} – ${m.away})`;
+    return sel;
+  }
+  /**
+   * Justification en langage clair d'une sélection : l'issue, d'où vient la probabilité (marché, modèle, accord ou non),
+   * ce que prélève le bookmaker sur ce choix comparé aux autres sélections de la semaine, et le contexte sportif.
+   * ref : { medYield } rendement médian des sélections disponibles ; kappa : prudence appliquée.
+   */
+  function legWhy(pr, m, market, sel, p, odds, src, ref) {
+    const st = pr.standings, f = pr.form || {};
+    const q = legProbs(pr, market, sel);
+    const out = [selPhrase(m, market, sel) + "."];
+    if (q.mk !== null && q.mo !== null) {
+      const gap = Math.abs(q.mo - q.mk);
+      out.push(`Chance retenue ${pc(p)} : le marché (cotes sans marge) dit ${pc(q.mk)}, notre modèle sportif seul ${pc(q.mo)}` +
+        (gap < 0.04 ? ", les deux sont d'accord." : gap < 0.08 ? `, léger écart.` : `, écart de ${Math.round(100 * gap)} points : choix moins sûr${ref && ref.kappa > 0 ? `, compté à ${pc(robustP(p, q, market, ref.kappa))} seulement pour construire le ticket (prudence)` : ""}.`));
+    } else if (q.mk !== null) out.push(`Chance retenue ${pc(p)} (cotes du marché sans marge, ${pc(q.mk)}).`);
+    else out.push(`Chance retenue ${pc(p)} d'après notre modèle seul (aucune cote de marché pour la comparer : estimation moins sûre).`);
+    const y = p * odds;
+    const bk = String(src || "").split(" · relevée")[0].split(" (")[0];
+    out.push(`Cote ${f2(odds)} chez ${bk || "le bookmaker"} pour une cote juste de ${f2(1 / p)} : ` +
+      (y >= 1 ? `elle paie ${Math.round(100 * (y - 1))} % au-dessus du prix juste.` : `le bookmaker garde environ ${Math.max(1, Math.round(100 * (1 - y)))} % sur ce choix`) +
+      (y < 1 && ref && U.isNum(ref.medYield) ? (y >= ref.medYield + 0.015 ? `, moins que sur la plupart des sélections de la semaine (${Math.round(100 * (1 - ref.medYield))} % en médiane) : c'est pour cela qu'il est retenu.` : `, ${Math.round(100 * (1 - ref.medYield))} % en médiane sur les sélections de la semaine.`) : y < 1 ? "." : ""));
+    const ctx = [];
+    if (st && st.home && st.away) ctx.push(`${m.home} ${st.home.pos}e (${st.home.pts} pts), ${m.away} ${st.away.pos}e (${st.away.pts} pts)`);
+    if (f.h || f.a) ctx.push(`forme récente ${f.h || "—"} contre ${f.a || "—"}`);
+    if (U.isNum(pr.lambdaHome)) ctx.push(`buts attendus ${f2(pr.lambdaHome, 1)} – ${f2(pr.lambdaAway, 1)}`);
+    if (ctx.length) out.push("Contexte : " + ctx.join(" ; ") + ".");
+    return out.join(" ");
   }
   function ticketCandidates(ctx, win, book) {
-    const s = ctx.state, set = s.settings, nowMs = Date.now();
+    const s = ctx.state, set = s.settings, nowMs = Date.now(), kappa = trainedKappa();
     const w = win || ticketWindow(ctx.today, set);
     const start = w.start, end = w.to;
     const lastPred = new Map(); for (const p of s.predictions) lastPred.set(p.matchId, p);
@@ -638,11 +704,17 @@
       }
       for (const [market, sel, label, p] of sels) {
         const od = om[market + "|" + sel]; if (!od || !U.isNum(od.v) || od.v <= 1 || !U.isNum(p)) continue;
+        const q = legProbs(pr, market, sel);
         out.push({ matchId: m.id, comp: m.comp, date: m.date, time: m.time || "", kickoff: ko ? new Date(ko).toISOString() : null, home: m.home, away: m.away,
-          market, sel, label, p, odds: od.v, oddsSrc: od.src, estOdds: !!od.est, userOdds: !!od.user, ev: p * od.v - 1, rel: pr.reliability, playerName: market === "Buteur" || market === "Joueur Décisif" ? sel : null,
-          top: market === "1N2" && { 1: 0, N: 1, 2: 2 }[sel] === top, why: legWhy(pr, m, market, sel, p, od.v, od.src), predictionId: pr.id });
+          market, sel, label, p, pR: robustP(p, q, market, kappa), pMkt: q.mk, pMod: q.mo, odds: od.v, oddsSrc: od.src, estOdds: !!od.est, userOdds: !!od.user, ev: p * od.v - 1, rel: pr.reliability, playerName: market === "Buteur" || market === "Joueur Décisif" ? sel : null,
+          top: market === "1N2" && { 1: 0, N: 1, 2: 2 }[sel] === top, predictionId: pr.id, _pr: pr, _m: m });
       }
     }
+    // justification : écrite une fois le rendement médian des sélections de la semaine connu (référence de comparaison)
+    const ys = out.filter((c) => c.market === "1N2" || c.market === "DC").map((c) => c.p * c.odds).sort((a, b) => a - b);
+    const ref = { medYield: ys.length ? ys[Math.floor(ys.length / 2)] : null, kappa };
+    for (const c of out) { c.why = legWhy(c._pr, c._m, c.market, c.sel, c.p, c.odds, c.oddsSrc, ref); delete c._pr; delete c._m; }
+    out.medYield = ref.medYield;
     return out;
   }
   const armCands = (cands, arm) => cands.filter((c) => armAllows(arm, c));
@@ -670,6 +742,56 @@
     const reason = `Stratégie « ${b.label} » : ${b.btW}/${b.btN} tickets gagnés sur les semaines rejouées` + (b.lvN ? `, ${b.lvW}/${b.lvN} en réel` : "") +
       `, meilleur taux attendu de cette fourchette (${pc(b.mean)} ; suivante : « ${st[1] ? st[1].label : "—"} » ${st[1] ? pc(st[1].mean) : ""}).`;
     return { arm, reason, stats: st };
+  }
+  /**
+   * Correction apprise par stratégie : tickets gagnés ÷ tickets attendus (somme des chances prudentes annoncées),
+   * semaines rejouées à demi-poids + semaines réelles (tickets fantômes réglés), rétrécie vers 1 (K = 1,5 ticket fictif).
+   * Une stratégie dont les tickets gagnent moins souvent qu'annoncé voit ses chances réduites, et inversement.
+   */
+  function armFactors(ctx, scId) {
+    const tr = FQ.TRAINED && FQ.TRAINED.tickets && (FQ.TRAINED.tickets.scenarios || []).find((x) => x.id === scId);
+    const live = (ctx.state.shadowTickets || []).filter((t) => t.scenario === scId && (t.status === "GAGNÉ" || t.status === "PERDU"));
+    const K = 1.5, out = {};
+    for (const a of TICKET_ARMS) {
+      const wk = (tr && tr.arms && tr.arms[a.id] && tr.arms[a.id].weeks) || [];
+      const lv = live.filter((t) => t.arm === a.id);
+      const btW = wk.reduce((x, w) => x + w[1], 0), btE = wk.reduce((x, w) => x + (U.isNum(w[5]) ? w[5] : w[3]), 0);
+      const lvW = lv.filter((t) => t.status === "GAGNÉ").length, lvE = lv.reduce((x, t) => x + (U.isNum(t.pRobust) ? t.pRobust : t.pJoint || 0), 0);
+      const W = 0.5 * btW + lvW, E = 0.5 * btE + lvE;
+      out[a.id] = { f: Math.min(1.6, Math.max(0.5, (W + K) / (E + K))), W, E, btW, btN: wk.length, btE, lvW, lvN: lv.length, lvE };
+    }
+    return out;
+  }
+  /**
+   * Stratégie jouée cette semaine. Procédure « corrigée » (par défaut) : chaque stratégie propose son meilleur ticket ;
+   * on retient la plus forte chance prudente × correction apprise, et, à 10 % près, la meilleure espérance corrigée.
+   * Procédure « taux » : meilleur taux de réussite passé (loi Bêta). La procédure est choisie à l'entraînement sur le passé.
+   */
+  function pickArm(ctx, sc, armTk) {
+    const proc = (FQ.TRAINED && FQ.TRAINED.tickets && FQ.TRAINED.tickets.choice) || "corrected";
+    const fresh = (id) => armTk[id] && !armTk[id].stub;
+    if (proc === "hitrate") {
+      const st = armStats(ctx, sc.id).filter((x) => fresh(x.id));
+      if (!st.length) return null;
+      const b = st[0], arm = TICKET_ARMS.find((a) => a.id === b.id);
+      const pOf = (id) => (U.isNum(armTk[id].pRobust) ? armTk[id].pRobust : armTk[id].pJoint);
+      const hi = st.filter((x) => pOf(x.id) > pOf(b.id) * 1.02).sort((x, y) => pOf(y.id) - pOf(x.id))[0];
+      const cd = FQ.TRAINED && FQ.TRAINED.tickets && FQ.TRAINED.tickets.choiceDetail;
+      return { arm, reason: `Stratégie « ${b.label} » : ${b.btW}/${b.btN} tickets gagnés sur les semaines rejouées${b.lvN ? `, ${b.lvW}/${b.lvN} en réel` : ""}, meilleur taux de réussite attendu de cette fourchette (${pc(b.mean)}).` +
+        (hi ? ` Cette semaine, « ${hi.label} » annonce une chance un peu plus haute (${pc1(pOf(hi.id))} contre ${pc1(pOf(b.id))}), mais la règle retenue suit le taux de réussite réellement observé${cd ? ` : rejouée semaine par semaine sur le passé, elle a gagné ${cd.hitrate.past} tickets contre ${cd.corrected.past} en suivant la chance annoncée corrigée` : ""}.` : ""), stats: st.map((x) => ({ id: x.id, mean: Math.round(x.mean * 1000) / 1000, bt: [x.btW, x.btN], live: [x.lvW, x.lvN] })) };
+    }
+    const F = armFactors(ctx, sc.id);
+    const c = allowedArms(ctx.state.settings).filter((a) => fresh(a.id)).map((a) => { const t = armTk[a.id], f = F[a.id].f, p0 = U.isNum(t.pRobust) ? t.pRobust : t.pJoint; return { a, t, f, p0, pc: p0 * f, evc: p0 * f * t.totalOdds }; });
+    if (!c.length) return null;
+    const mx = Math.max(...c.map((x) => x.pc));
+    const near = c.filter((x) => x.pc >= 0.9 * mx);
+    const b = near.reduce((a, x) => (x.evc > a.evc ? x : a), near[0]);
+    const raw = c.reduce((a, x) => (x.p0 > a.p0 ? x : a), c[0]);
+    const fb = F[b.a.id];
+    const reason = `Stratégie « ${b.a.label} » : meilleure chance de la semaine une fois corrigée par l'historique (${pc1(b.p0)} annoncés × ${f2(b.f)} ; ce produit sert à classer les stratégies, ce n'est pas une probabilité). ` +
+      `Ses tickets passés ont gagné ${f2(fb.W, 1)} fois pour ${f2(fb.E, 1)} annoncées (semaines rejouées comptées à moitié${fb.lvN ? `, dont ${fb.lvW}/${fb.lvN} en réel` : ""}) : ${b.f > 1.05 ? "ils passent plus souvent qu'annoncé" : b.f < 0.95 ? "ils passent moins souvent qu'annoncé" : "conforme à l'annonce"}.` +
+      (raw.a.id !== b.a.id ? ` Sans correction, « ${raw.a.label} » aurait été devant (${pc1(raw.p0)} annoncé, ×${f2(raw.f)} d'après son historique).` : "");
+    return { arm: b.a, reason, stats: c.map((x) => ({ id: x.a.id, p: Math.round(x.p0 * 10000) / 10000, f: Math.round(x.f * 1000) / 1000, pc: Math.round(x.pc * 10000) / 10000 })) };
   }
   function trainedTicketRule(id) {
     const t = FQ.TRAINED && FQ.TRAINED.tickets;
@@ -712,7 +834,42 @@
     return true;
   }
   const legOfCand = (c) => ({ matchId: c.matchId, comp: c.comp, date: c.date, time: c.time, kickoff: c.kickoff, home: c.home, away: c.away, market: c.market, sel: c.sel, label: c.label,
-    p: Math.round(c.p * 10000) / 10000, pMkt: U.isNum(c.pMkt) ? Math.round(c.pMkt * 10000) / 10000 : null, odds: c.odds, oddsSrc: c.oddsSrc, estOdds: !!c.estOdds, rel: c.rel, why: c.why || null, status: "EN ATTENTE" });
+    p: Math.round(c.p * 10000) / 10000, pMkt: U.isNum(c.pMkt) ? Math.round(c.pMkt * 10000) / 10000 : null, pMod: U.isNum(c.pMod) ? Math.round(c.pMod * 10000) / 10000 : null, pR: U.isNum(c.pR) ? Math.round(c.pR * 10000) / 10000 : null, odds: c.odds, oddsSrc: c.oddsSrc, estOdds: !!c.estOdds, rel: c.rel, why: c.why || null, status: "EN ATTENTE" });
+  const pc1 = (x) => (U.isNum(x) ? (100 * x).toFixed(x < 0.1 ? 1 : 0).replace(".", ",") + " %" : "—");
+  /** Meilleurs tickets des autres stratégies au même niveau (comparaison affichée) */
+  function altsOf(armTk, chosen) {
+    return TICKET_ARMS.filter((a) => a.id !== chosen && armTk[a.id]).map((a) => ({ arm: a.id, label: a.label, p: Math.round(armTk[a.id].pJoint * 10000) / 10000, n: armTk[a.id].legs.length, odds: Math.round(armTk[a.id].totalOdds * 100) / 100 }))
+      .sort((x, y) => y.p - x.p).slice(0, 4);
+  }
+  /**
+   * Pourquoi ce ticket, en clair : comment il est construit, pourquoi ce nombre de sélections (comparaison 1 → 15),
+   * ce que donnent les autres stratégies à la même cote, pourquoi cette stratégie, et à quelle cote il deviendrait rentable.
+   * Paragraphes séparés par « \n ».
+   */
+  function ticketWhy(tk, sc, arm, choice, armTk) {
+    const n = tk.legs.length, book = tk.book ? FR_NAMES()[tk.book] || tk.book : "Bet 365 (aucune cote française)";
+    const L = [];
+    L.push(`${n} sélection${n > 1 ? "s" : ""} chez ${book}, cote ${f2(tk.totalOdds)} (visée ${f2(sc.lo, 1)} à ${f2(sc.hi, 1)}). Chance estimée que tout passe : ${pc1(tk.pJoint)}${U.isNum(tk.pRobust) && tk.pRobust < tk.pJoint - 0.0005 ? ` (${pc1(tk.pRobust)} en version prudente, en tenant compte des désaccords entre modèle et marché)` : ""}.`);
+    L.push("Méthode : à cote totale fixée, la chance d'un combiné vaut le produit des « rendements » de ses sélections (chance × cote ; 1 = prix juste) divisé par la cote totale, et son espérance suit le même produit. " +
+      "On garde donc les sélections où le bookmaker prélève le moins" + (trainedKappa() > 0 ? " et où notre modèle et le marché sont d'accord" : "") + ", avec le nombre de sélections qui donne la meilleure chance, sans nombre fixé à l'avance ; à chance quasi égale, le ticket qui rapporte le plus l'emporte.");
+    const bn = (tk.byN || []).filter((x) => U.isNum(x.pJoint || x.p));
+    if (bn.length > 1) {
+      const pj = (x) => (U.isNum(x.pJoint) ? x.pJoint : x.p);
+      const bestN = bn.reduce((a, x) => (pj(x) > pj(a) ? x : a), bn[0]);
+      const last = bn[bn.length - 1];
+      L.push(`Nombre de sélections comparé (meilleur ticket trouvé pour chaque longueur, même cote visée) : ${bn.map((x) => `${x.n} → ${pc1(pj(x))}`).join(" · ")}. ` +
+        (bestN.n === bn[0].n && bestN.n > 3 ? `Avec cette stratégie, il faut au moins ${bestN.n} sélections pour atteindre la cote visée ; chaque sélection en plus ajoute la marge du bookmaker.` :
+          last.n > bestN.n && bestN.n <= 5 ? `${bestN.n === 1 ? "Un seul pari suffit : avec" : "Avec"} plus de sélections, chacune ajoute la marge du bookmaker et la chance baisse (${last.n} sélections : ${pc1(pj(last))}).` :
+          bestN.n > bn[0].n ? `Ici, des sélections très probables et peu taxées permettent d'aller jusqu'à ${bestN.n} sélections sans perdre de chance.` : ""));
+    } else if (n === 1) L.push("Un seul pari : pour cette cote, ajouter une sélection ne ferait que baisser la chance (marge du bookmaker en plus).");
+    const alts = altsOf(armTk || {}, arm.id);
+    if (alts.length) L.push(`Autres stratégies essayées à cette cote : ${alts.map((a) => `${a.label} ${pc1(a.p)} (${a.n} sél.)`).join(" ; ")}.`);
+    if (choice && choice.reason) L.push(choice.reason);
+    const est = tk.legs.filter((l) => l.estOdds).length;
+    L.push((tk.ev >= 0 ? `Espérance positive : +${Math.round(100 * tk.ev)} %.` : `Espérance ${Math.round(100 * tk.ev)} % : le ticket ne devient rentable qu'à une cote totale d'au moins ${f2(1.03 / tk.pJoint)} (cote boostée, ou information que le marché n'a pas).`) +
+      (tk.boost ? ` Multiboost Betclic estimé +${f2(100 * tk.boost, 1)} % (cote ${f2(tk.rawOdds)} avant boost).` : "") + (est ? ` ${est} cote(s) double chance estimée(s) d'après le 1N2 : vérifie le prix.` : ""));
+    return L.join("\n");
+  }
   /**
    * Paper betting : un jeu de 3 tickets par semaine (lundi → dimanche), construit à partir du jeudi sur les matchs du jeudi au dimanche
    * avec les cotes publiées. Chaque sélection est l'issue jugée la plus probable de son match ; le ticket a la plus forte chance de gain
@@ -735,35 +892,35 @@
     s.armChoice = s.armChoice || {};
     for (const sc of scenarios(s.settings)) {
       // tickets fantômes : un par stratégie
+      const armTk = {};
       for (const arm of TICKET_ARMS) {
         const sh = s.shadowTickets.find((t) => t.scenario === sc.id && t.week === win.week && t.arm === arm.id);
-        if (sh && (sh.frozen || sh.status !== "EN ATTENTE")) continue;
+        if (sh && (sh.frozen || sh.status !== "EN ATTENTE")) { armTk[arm.id] = { stub: true, pJoint: sh.pJoint, pRobust: sh.pRobust, totalOdds: sh.totalOdds, legs: sh.legs, ev: sh.ev }; continue; }
         const tk = best.find(arm, sc);
+        if (tk) armTk[arm.id] = tk;
         if (!tk) { if (sh) s.shadowTickets.splice(s.shadowTickets.indexOf(sh), 1); continue; }
-        const body = { scenario: sc.id, arm: arm.id, week: win.week, book: tk.book, legs: tk.legs.map(legOfCand), totalOdds: Math.round(tk.totalOdds * 100) / 100, boost: tk.boost, pJoint: tk.pJoint, ev: tk.ev, stake: 1 };
+        const body = { scenario: sc.id, arm: arm.id, week: win.week, book: tk.book, legs: tk.legs.map(legOfCand), totalOdds: Math.round(tk.totalOdds * 100) / 100, boost: tk.boost, pJoint: tk.pJoint, pRobust: tk.pRobust, ev: tk.ev, stake: 1 };
         if (sh) Object.assign(sh, body); else s.shadowTickets.push(Object.assign({ id: U.uid("sh"), createdAt: now, status: "EN ATTENTE", frozen: false, profit: 0 }, body));
       }
-      // ticket joué : stratégie choisie une fois par semaine (au premier passage du jeudi)
+      // ticket joué : stratégie choisie à chaque cycle jusqu'au premier coup d'envoi du ticket, puis figée
       const key = win.week + "|" + sc.id;
-      if (!s.armChoice[key]) { const c = chooseArm(ctx, sc.id); s.armChoice[key] = { arm: c.arm.id, reason: c.reason, at: now, stats: c.stats.map((x) => ({ id: x.id, mean: Math.round(x.mean * 1000) / 1000, bt: [x.btW, x.btN], live: [x.lvW, x.lvN] })) }; }
-      const choice = s.armChoice[key], arm = TICKET_ARMS.find((a) => a.id === choice.arm) || TICKET_ARMS[0];
       const mine = s.paperTickets.find((t) => t.scenario === sc.id && t.week === win.week);
       if (mine && (mine.frozen || mine.status !== "EN ATTENTE")) continue; // ticket de la semaine déjà engagé
-      const tk = best.find(arm, sc);
+      const choice = pickArm(ctx, sc, armTk);
+      const arm = choice ? choice.arm : null;
+      if (choice) s.armChoice[key] = { arm: arm.id, reason: choice.reason, at: now, stats: choice.stats };
+      const tk = arm ? armTk[arm.id] : null;
       if (!tk) { if (mine && mine.legs.some((l) => !cands.some((c) => c.matchId === l.matchId))) s.paperTickets.splice(s.paperTickets.indexOf(mine), 1); continue; }
       const legs = tk.legs.map(legOfCand);
-      const est = legs.filter((l) => l.estOdds).length;
-      const why = `${legs.length} sélection${legs.length > 1 ? "s" : ""}, ${arm.top ? `chacune l'issue la plus probable de son match (≥ ${Math.round(100 * arm.pMin)} %)` : arm.family === "multi" ? `tous marchés confondus, chacune estimée à ${Math.round(100 * arm.pMin)} % ou plus, choisies pour la plus forte chance de gain à cette cote` : arm.noDraw ? "victoires uniquement, choisies pour la plus forte chance de gain à cette cote" : "choisies pour la plus forte chance de gain à cette cote"} ; chance estimée que tout passe : ${pc(tk.pJoint)}.` +
-        (tk.boost ? ` Multiboost Betclic estimé +${(100 * tk.boost).toFixed(1).replace(".", ",")} % (cote ${String(Math.round(tk.rawOdds * 100) / 100).replace(".", ",")} avant boost).` : "") +
-        (est ? ` ${est} cote(s) double chance estimée(s) d'après le 1N2 : vérifie le prix.` : "") +
-        ` Chiffré chez ${tk.book ? FR_NAMES()[tk.book] || tk.book : "Bet 365"}, le bookmaker français qui paie le mieux ce ticket. Espérance ${tk.ev >= 0 ? "+" : ""}${(100 * tk.ev).toFixed(0)} % : rentable seulement à une cote totale d'au moins ${(1.03 / tk.pJoint).toFixed(2).replace(".", ",")} (cote boostée, ou information que le marché n'a pas).` + ` ${choice.reason}`;
+      const why = ticketWhy(tk, sc, arm, choice, armTk);
       const body = { scenario: sc.id, label: sc.label, week: win.week, window: [win.from, win.to], target: [sc.lo, sc.hi], arm: undefined, strategy: arm.id, strategyLabel: arm.label, why,
         book: tk.book, bookName: tk.book ? FR_NAMES()[tk.book] || tk.book : "Bet 365 (aucune cote française)",
-        legs, totalOdds: Math.round(tk.totalOdds * 100) / 100, rawOdds: Math.round(tk.rawOdds * 100) / 100, boost: tk.boost, pJoint: tk.pJoint, ev: tk.ev, stake: sc.stake, updatedAt: now };
+        legs, totalOdds: Math.round(tk.totalOdds * 100) / 100, rawOdds: Math.round(tk.rawOdds * 100) / 100, boost: tk.boost, pJoint: tk.pJoint, pRobust: tk.pRobust, ev: tk.ev, stake: sc.stake, updatedAt: now,
+        byN: (tk.byN || []).map((x) => ({ n: x.n, p: Math.round(x.pJoint * 10000) / 10000, odds: Math.round(x.totalOdds * 100) / 100 })), alts: altsOf(armTk, arm.id) };
       if (mine) {
         const same = mine.legs.length === legs.length && mine.legs.every((l, i) => l.matchId === legs[i].matchId && l.sel === legs[i].sel && l.odds === legs[i].odds);
         if (!same) { Object.assign(mine, body); mine.revisions = (mine.revisions || 0) + 1; }
-        else Object.assign(mine, { book: body.book, bookName: body.bookName, why: body.why, strategy: body.strategy, strategyLabel: body.strategyLabel, pJoint: body.pJoint, ev: body.ev });
+        else Object.assign(mine, { book: body.book, bookName: body.bookName, why: body.why, strategy: body.strategy, strategyLabel: body.strategyLabel, pJoint: body.pJoint, pRobust: body.pRobust, ev: body.ev, byN: body.byN, alts: body.alts, legs: legs });
       } else {
         s.paperTickets.push(Object.assign({ id: U.uid("tk"), createdAt: now, status: "EN ATTENTE", frozen: false, profit: 0, revisions: 0 }, body));
         if (rep) rep.ticketsNew = (rep.ticketsNew || 0) + 1;
@@ -772,7 +929,7 @@
   }
   /**
    * Recherche du meilleur ticket d'une stratégie : construit chez chacun des bookmakers français (un ticket se joue chez un seul),
-   * garde celui qui maximise l'objectif de la stratégie (chance de gain, ou espérance pour « Valeur »). Repli Bet 365 sans cote française.
+   * garde la meilleure chance prudente (à 10 % près, la meilleure espérance), ou la meilleure espérance pour « Valeur ». Repli Bet 365 sans cote française.
    */
   function bestTicketFinder(ctx, win, bf) {
     const books = Object.keys(FR_NAMES());
@@ -780,14 +937,18 @@
     if (!by.length) by = [{ b: null, c: ticketCandidates(ctx, win, null) }];
     const all = [].concat(...by.map((x) => x.c));
     const find = (arm, sc) => {
-      let best = null;
+      const found = [];
       for (const { b, c } of by) {
         const tk = buildTicket(armCands(c, arm), sc, { boost: b === "betclic_fr" ? bf : null, objective: arm.objective, pool: 120, beam: 300 });
-        if (!tk) continue;
-        const sc1 = arm.objective === "ev" ? tk.pJoint * tk.totalOdds : tk.pJoint, sc0 = best ? (arm.objective === "ev" ? best.pJoint * best.totalOdds : best.pJoint) : -1;
-        if (sc1 > sc0) { best = tk; best.book = b; }
+        if (tk) { tk.book = b; tk.medYield = c.medYield; found.push(tk); }
       }
-      return best;
+      if (!found.length) return null;
+      const ev = (t) => t.pRobust * t.totalOdds;
+      if (arm.objective === "ev") return found.reduce((a, t) => (ev(t) > ev(a) ? t : a), found[0]);
+      // même règle qu'à l'intérieur d'un bookmaker : chance prudente maximale, à 10 % près l'espérance départage
+      const pMax = Math.max(...found.map((t) => t.pRobust));
+      const near = found.filter((t) => t.pRobust >= 0.9 * pMax);
+      return near.reduce((a, t) => (ev(t) > ev(a) ? t : a), near[0]);
     };
     return { all, find };
   }
@@ -797,9 +958,12 @@
     const win = winArg || (w0.open ? w0 : Object.assign({}, w0, { start: ctx.today }));
     const f = bestTicketFinder(ctx, win, boostFn(ctx.state)), cands = f.all;
     return scenarios(ctx.state.settings).map((sc) => {
-      const c = chooseArm(ctx, sc.id);
-      const tk = f.find(c.arm, sc);
-      return { sc, rule: c.arm.label, strategy: c.arm.id, reason: c.reason, ticket: tk, bookName: tk && tk.book ? FR_NAMES()[tk.book] : null, nCands: cands.filter((x) => x.top).length, nMatches: new Set(cands.map((x) => x.matchId)).size, win };
+      const armTk = {};
+      for (const a of allowedArms(ctx.state.settings)) { const t = f.find(a, sc); if (t) armTk[a.id] = t; }
+      const c = pickArm(ctx, sc, armTk) || { arm: TICKET_ARMS[0], reason: "" };
+      const tk = armTk[c.arm.id] || null;
+      if (tk) tk.legs = tk.legs.map(legOfCand);
+      return { sc, rule: c.arm.label, strategy: c.arm.id, reason: c.reason, why: tk ? ticketWhy(tk, sc, c.arm, c, armTk) : null, ticket: tk, bookName: tk && tk.book ? FR_NAMES()[tk.book] : null, nCands: cands.filter((x) => x.top).length, nMatches: new Set(cands.map((x) => x.matchId)).size, win };
     });
   }
 
@@ -823,7 +987,7 @@
         const shown = (s.paperTickets || []).find((t) => t.week === wk && t.scenario === sc.id);
         scen[sc.id] = { shown: shown ? { strategy: shown.strategy || null, status: shown.status, odds: shown.totalOdds, legs: shown.legs.length, lost: shown.legs.filter((l) => l.status === "PERDU").length } : null,
           arms: Object.fromEntries(sh.filter((t) => t.scenario === sc.id).map((t) => [t.arm, { status: t.status, legs: t.legs.length, lost: t.legs.filter((l) => l.status === "PERDU").length, p: Math.round(t.pJoint * 1000) / 1000 }])),
-          next: chooseArm(ctx, sc.id).arm.id };
+          factors: Object.fromEntries(Object.entries(armFactors(ctx, sc.id)).map(([k, v]) => [k, Math.round(v.f * 1000) / 1000])) };
       }
       const pk = (s.picks || []).filter((p) => p.date >= wk && p.date <= end && (p.status === "GAGNÉ" || p.status === "PERDU"));
       const ll = { ours: 0, market: 0, n: 0 };
@@ -839,8 +1003,59 @@
         ll: ll.n ? { n: ll.n, ours: ll.ours / ll.n, market: ll.market / ll.n } : null, clv: clv.length ? { n: clv.length, ev: clv.reduce((a, x) => a + x, 0) / clv.length } : null });
       added++;
     }
+    // paris saisis par Iso (réels et tests séparés), recalculés sur les 10 dernières semaines (règlements tardifs)
+    const betWeek = (b) => U.weekMonday(((b.legs || []).map((l) => l.date).filter(Boolean).sort()[0]) || String(b.createdAt || "").slice(0, 10));
+    for (const e of s.learnLog.slice(-10)) {
+      const bs = (s.realBets || []).filter((b) => betWeek(b) === e.week);
+      e.bets = { reel: betSummary(bs.filter(isRealBet)), test: betSummary(bs.filter((b) => !isRealBet(b))) };
+    }
     s.learnLog = s.learnLog.slice(-80);
     return added;
+  }
+
+  /* ----------------------------------------------- contrôle de couverture (14 jours) */
+  /**
+   * Chaque cycle, par compétition : matchs à venir sur 14 jours, analysés, avec cote française / une cote ;
+   * matchs des 7 derniers jours sans résultat, reportés ou annulés, doublons. Les anomalies sont listées une par une.
+   */
+  function coverageReport(ctx) {
+    const s = ctx.state, today = ctx.today, end = U.addDays(today, 13), past = U.addDays(today, -7), nowMs = Date.now();
+    const norm = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const lastPred = new Map(); for (const p of s.predictions) lastPred.set(p.matchId, p);
+    const comps = {}, issues = [], seen = new Map();
+    const C = (c) => (comps[c] = comps[c] || { up: 0, analysed: 0, fr: 0, odds: 0, soon: 0, soonOdds: 0, missingRes: 0, postponed: 0, dup: 0, lastResult: null, next: null });
+    const name = (m) => `${m.home} – ${m.away} (${m.date})`;
+    for (const m of ctx.matches) {
+      const c = C(m.comp);
+      if (m.hg !== null && m.hg !== undefined && (!c.lastResult || m.date > c.lastResult)) c.lastResult = m.date;
+      if (m.date < past || m.date > end) continue;
+      const key = m.comp + "|" + m.date + "|" + norm(m.home) + "|" + norm(m.away);
+      if (seen.has(key)) { c.dup++; issues.push({ comp: m.comp, kind: "doublon", text: `${name(m)} présent deux fois` }); continue; }
+      seen.set(key, m.id);
+      if (m.status === "REPORTÉ" || m.status === "ANNULÉ") { c.postponed++; issues.push({ comp: m.comp, kind: m.status === "REPORTÉ" ? "reporté" : "annulé", text: name(m) }); continue; }
+      const played = m.hg !== null && m.hg !== undefined;
+      if (!played && kickoffPassed(m, nowMs - 3 * 3600e3)) { c.missingRes++; issues.push({ comp: m.comp, kind: "résultat manquant", text: `${name(m)} : coup d'envoi passé depuis plus de 3 h, score pas encore publié par les sources` }); continue; }
+      if (played || m.date < today || kickoffPassed(m, nowMs)) continue;
+      c.up++; if (!c.next || m.date < c.next) c.next = m.date;
+      const pr = lastPred.get(m.id);
+      if (pr && pr.markets) c.analysed++;
+      else issues.push({ comp: m.comp, kind: "non analysé", text: `${name(m)} : pas de pronostic (historique insuffisant pour une des équipes, ou match ajouté depuis le dernier calcul)` });
+      const fr = !!(m.oddsFr && m.oddsFr.books && Object.keys(m.oddsFr.books).length), any = fr || !!(m.odds && m.odds.h);
+      if (fr) c.fr++; if (any) c.odds++;
+      if (U.daysBetween(today, m.date) <= 2) { c.soon++; if (any) c.soonOdds++; else issues.push({ comp: m.comp, kind: "sans cote", text: `${name(m)} : à moins de 3 jours et aucune cote relevée` }); }
+    }
+    const tot = Object.values(comps).reduce((a, c) => { for (const k of ["up", "analysed", "fr", "odds", "missingRes", "postponed", "dup", "soon", "soonOdds"]) a[k] = (a[k] || 0) + c[k]; return a; }, {});
+    return { at: new Date().toISOString(), from: today, to: end, comps, totals: tot, issues: issues.slice(0, 80), nIssues: issues.length };
+  }
+
+  /** Paris saisis par Iso : « test » (simulation, par défaut) ou « réel » (vraiment joué). Les anciens paris sont des tests. */
+  const isRealBet = (b) => !!b && b.mode === "reel";
+  function migrateBets(s) { let n = 0; for (const b of s.realBets || []) if (b.mode !== "reel" && b.mode !== "test") { b.mode = "test"; n++; } return n; }
+  /** Bilan d'une liste de paris saisis */
+  function betSummary(list) {
+    const done = list.filter((b) => b.status === "GAGNÉ" || b.status === "PERDU");
+    const staked = done.reduce((a, b) => a + (b.stake || 0), 0), profit = done.reduce((a, b) => a + (b.profit || 0), 0);
+    return { n: list.length, done: done.length, won: done.filter((b) => b.status === "GAGNÉ").length, staked: Math.round(staked * 100) / 100, profit: Math.round(profit * 100) / 100, expected: Math.round(done.reduce((a, b) => a + (U.isNum(b.pJoint) ? b.pJoint : 0), 0) * 100) / 100 };
   }
 
   /* ----------------------------------------------- compactage de l'état */
@@ -878,6 +1093,7 @@
     if (!s.settings.oddsBookUser) s.settings.oddsBook = "best";       // meilleur prix parmi les bookmakers français
     if (!s.settings.multiboostUser) s.settings.multiboost = false;      // Multiboost seulement si Iso l'active
     s.settings.ticketPolicy = "auto";
+    migrateBets(s);
     const rep = { at: new Date().toISOString(), origin, audited: 0, settled: 0, analysed: 0, insufficient: 0, autoBets: 0, staked: 0, closed: 0, calibration: null, notes: [] };
     // 1. audit automatique
     const audited = new Set(s.audits.filter((a) => !a.reverted).map((a) => a.matchId));
@@ -926,6 +1142,7 @@
     updateTickets(ctx, rep);
     rep.clv = updateClv(ctx);
     rep.journal = updateJournal(ctx);
+    s.coverage = coverageReport(ctx); rep.coverageIssues = s.coverage.nIssues;
     rep.ticketsChanged = tkBefore !== JSON.stringify((s.paperTickets || []).map((t) => [t.id, t.status, t.updatedAt, t.frozen]).concat((s.realBets || []).map((t) => [t.id, t.status])));
     // 5. apprentissage
     const resolvedPreds = s.predictions.filter((p) => s.results[p.matchId] && Number.isFinite(s.results[p.matchId].hg)).length;
@@ -952,6 +1169,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
-    SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armCands, armAllows, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
+  FQ.P = { coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+    SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

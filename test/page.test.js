@@ -68,8 +68,12 @@ test("la page se charge, affiche les 4 onglets et le formulaire « Mon ticket »
   const btn = [...d.querySelectorAll(".topbar button")].find((b) => /Mon ticket/.test(b.textContent));
   assert.ok(btn, "bouton « Mon ticket » absent de la barre du haut");
   btn.click();
-  const dlg = await until(() => d.querySelector('[aria-label="Saisir mon ticket réel"]'), 5000);
+  const dlg = await until(() => d.querySelector('[aria-label="Enregistrer mon ticket"]'), 5000);
   assert.ok(dlg, "formulaire de saisie non ouvert");
+  // test ou réel : « test » par défaut (un ticket saisi n'est pas forcément joué)
+  const radios = [...dlg.querySelectorAll('[role="radio"]')];
+  assert.equal(radios.length, 2, "choix test / réel absent");
+  assert.ok(/Test/.test(radios.find((r) => r.getAttribute("aria-checked") === "true").textContent), "« test » doit être le choix par défaut");
   assert.ok(dlg.querySelector("#lp-q"), "recherche de match absente");
   // recherche d'une équipe présente dans les données
   const team = (w.FQ_DATASET.competitions.find((c) => c.code === "FL1").seasons.slice(-1)[0].matches.find((m) => m[6] === null) || [])[4];
@@ -85,6 +89,7 @@ test("la page se charge, affiche les 4 onglets et le formulaire « Mon ticket »
   // onglet Performance : carte CLV
   [...d.querySelectorAll(".tabs button")].find((b) => /Performance/.test(b.textContent)).click();
   assert.ok(await until(() => /cote de clôture/i.test(d.body.textContent), 10000), "carte CLV absente");
+  assert.ok(/test final/i.test(d.body.textContent), "résultats du test final absents");
   const real = errors.filter((e) => !/Not implemented|ResizeObserver|getBBox|width\(0\) and height\(0\)/.test(e));
   assert.deepEqual(real, [], "erreurs JavaScript dans la page");
   } finally { w.close(); } // ferme les minuteries de la page (sinon le processus ne se termine pas)

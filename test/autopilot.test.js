@@ -171,7 +171,9 @@ test("cycle réel : tickets justifiés, stratégie notée, fantômes suivis pour
   P.runCycle(ctx, "test");
   for (const t of state.paperTickets) {
     assert.ok(t.strategy && t.why, "stratégie et justification du ticket");
-    for (const l of t.legs) assert.ok(l.why && /estimé/.test(l.why), "justification de chaque sélection");
+    for (const l of t.legs) assert.ok(l.why && /Chance retenue/.test(l.why) && /cote juste/.test(l.why), "justification de chaque sélection");
+    assert.ok(Array.isArray(t.byN) && t.byN.some((x) => x.n === t.legs.length), "comparaison par nombre de sélections");
+    assert.ok(/Méthode/.test(t.why), "méthode expliquée");
     const arm = P.TICKET_ARMS.find((a) => a.id === t.strategy);
     if (arm.top) {
       const preds = new Map(state.predictions.map((p) => [p.matchId, p]));
@@ -203,4 +205,73 @@ test("double chance : cote déduite du 1N2 réel, corrigée par les cotes réell
   assert.equal(dc["1N"], Math.floor(100 / (1 / 1.5 + 1 / 4.2)) / 100);
   const st = { realBets: [{ legs: [1.12, 1.25, 1.3].map((x) => ({ market: "DC", odds: x * 1.02, estOdds: x })) }] };
   assert.equal(P.learnDcFactor(st).dcFactor, 1.02);
+});
+
+test("tickets : chance et profit, comparaison par nombre de sélections, prudence sur les désaccords", () => {
+  // 3 sélections peu taxées (rendement 0,99) contre 8 favoris très taxés (rendement 0,92) : à cote ~10, 3 sélections gagnent
+  const c = [];
+  for (let i = 0; i < 3; i++) c.push({ matchId: "a" + i, p: 0.99 / 2.16, odds: 2.16 });
+  for (let i = 0; i < 8; i++) c.push({ matchId: "b" + i, p: 0.92 / 1.34, odds: 1.34 });
+  const sc = { lo: 9.5, hi: 11, maxLegs: 10, maxLegOdds: 5 };
+  const t = P.buildTicket(c, sc, {});
+  assert.equal(t.legs.length, 3, "les sélections peu taxées l'emportent");
+  assert.ok(t.byN.length >= 2 && t.byN.find((x) => x.n === 3).pJoint >= Math.max(...t.byN.map((x) => x.pJoint)) - 1e-12);
+  // même chance, prudence : la sélection où modèle et marché divergent passe derrière
+  const q = { mk: 0.45, mo: 0.30 };
+  assert.ok(Math.abs(P.robustP(0.45, q, "1N2", 0.5) - 0.375) < 1e-9);
+  assert.equal(P.robustP(0.45, { mk: 0.45, mo: 0.45 }, "1N2", 2), 0.45);
+  const d = [{ matchId: "x", p: 0.5, pR: 0.42, odds: 2 }, { matchId: "y", p: 0.5, pR: 0.5, odds: 2 }];
+  const t2 = P.buildTicket(d, { lo: 1.9, hi: 2.1, maxLegs: 1, maxLegOdds: 3 }, {});
+  assert.equal(t2.legs[0].matchId, "y");
+  // à chance quasi égale (écart < 10 %), le ticket qui rapporte le plus
+  const e = [{ matchId: "u", p: 0.5, odds: 1.9 }, { matchId: "v", p: 0.48, odds: 2.1 }];
+  const t3 = P.buildTicket(e, { lo: 1.8, hi: 2.2, maxLegs: 1, maxLegOdds: 3 }, {});
+  assert.equal(t3.legs[0].matchId, "v");
+});
+
+test("correction apprise par stratégie et choix de la stratégie jouée", () => {
+  const saved = FQ.TRAINED;
+  // fav45 annonce 20 % et gagne 1 fois sur 20 ; fav55 annonce 18 % et gagne 6 fois sur 20
+  FQ.TRAINED = { tickets: { choice: "corrected", scenarios: [{ id: "prudent", arms: {
+    fav45: { weeks: Array.from({ length: 20 }, (_, i) => ["w" + i, i < 1 ? 1 : 0, 2, 0.2, 3.5, 0.2]) },
+    fav55: { weeks: Array.from({ length: 20 }, (_, i) => ["w" + i, i < 6 ? 1 : 0, 2, 0.18, 3.5, 0.18]) } } }] } };
+  const state = FQ.emptyState(); state.settings.ticketPolicy = "favoris";
+  const ctx = ctxFor([], state);
+  const F = P.armFactors(ctx, "prudent");
+  assert.ok(F.fav45.f < 1 && F.fav55.f > 1, JSON.stringify(F));
+  const armTk = { fav45: { pJoint: 0.22, pRobust: 0.22, totalOdds: 3.5, legs: [1, 2] }, fav55: { pJoint: 0.2, pRobust: 0.2, totalOdds: 3.5, legs: [1, 2] } };
+  const c = P.pickArm(ctx, P.scenarios(state.settings)[1], armTk);
+  assert.equal(c.arm.id, "fav55", "la chance corrigée l'emporte sur la chance annoncée");
+  assert.ok(/Sans correction/.test(c.reason));
+  FQ.TRAINED = saved;
+});
+
+test("paris saisis : test ou réel, bilans séparés, anciens paris comptés comme tests", () => {
+  const s = FQ.emptyState();
+  s.realBets = [{ id: "a", status: "GAGNÉ", stake: 10, profit: 15 }, { id: "b", mode: "reel", status: "PERDU", stake: 5, profit: -5 }];
+  assert.equal(P.migrateBets(s), 1);
+  assert.equal(s.realBets[0].mode, "test");
+  assert.equal(s.realBets.filter(P.isRealBet).length, 1);
+  const r = P.betSummary(s.realBets.filter(P.isRealBet)), t = P.betSummary(s.realBets.filter((b) => !P.isRealBet(b)));
+  assert.deepEqual([r.done, r.won, r.profit], [1, 0, -5]);
+  assert.deepEqual([t.done, t.won, t.profit], [1, 1, 15]);
+});
+
+test("contrôle de couverture : matchs analysés, résultats manquants, doublons", () => {
+  const ms = [match({ id: "A", date: "2026-10-18" }), match({ id: "B", date: "2026-10-18" }), match({ id: "C", date: "2026-10-12", home: "Nice", away: "Brest", status: "RÉSULTAT MANQUANT" })];
+  const s = FQ.emptyState(); s.predictions = [{ matchId: "A", markets: { p1: 0.5, pN: 0.3, p2: 0.2 } }];
+  const cov = P.coverageReport(ctxFor(ms, s));
+  assert.equal(cov.comps.FL1.dup, 1);
+  assert.equal(cov.comps.FL1.up, 1);
+  assert.equal(cov.comps.FL1.analysed, 1);
+  assert.equal(cov.comps.FL1.missingRes, 1);
+  assert.ok(cov.issues.some((x) => x.kind === "doublon") && cov.issues.some((x) => x.kind === "résultat manquant"));
+});
+
+test("intervalles de confiance : Wilson et bootstrap", () => {
+  const w = FQ.T.wilson(5, 10);
+  assert.ok(Math.abs(w[0] - 0.2366) < 0.001 && Math.abs(w[1] - 0.7634) < 0.001);
+  assert.equal(FQ.T.wilson(0, 0), null);
+  const b = FQ.T.bootRoi([1, -1, 1, -1, 1, -1, 1, -1]);
+  assert.ok(b[0] < 0 && b[1] > 0);
 });

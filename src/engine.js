@@ -97,7 +97,7 @@
             neutral: x.neutral !== undefined ? !!x.neutral : c.code === "WC" ? !/Mexico|Canada|United States|USA/.test(home) : false,
             regular: x.reg !== undefined ? !!x.reg : undefined,
             odds: x.odds || (x.oddsIsClose && x.close ? Object.assign({}, x.close, { src: x.close.src + " — utilisée faute de cote d'avant-match" }) : null),
-            close: x.close || null, closeRef: x.closeRef || null, oddsFr: x.oddsFr || null, oddsFrX: x.oddsFrX || null, oddsSharp: x.oddsSharp || null, ou25: x.ou25 || null, xg: x.xg || null, aet: x.aet || null, ft: x.ft || null, eid: x.eid || null,
+            close: x.close || null, closeRef: x.closeRef || null, oddsFr: x.oddsFr || null, oddsFrX: x.oddsFrX || null, oddsSharp: x.oddsSharp || null, sot: x.sot || null, oddsIsClose: x.oddsIsClose || 0, ou25: x.ou25 || null, xg: x.xg || null, aet: x.aet || null, ft: x.ft || null, eid: x.eid || null,
             source: src, sourceFile: s.file, sourceCommitDate: s.commitDate,
             webCheck: web,
           });
@@ -319,6 +319,94 @@
     return { mh: clamp(mh, DRIVER_CAP[0], DRIVER_CAP[1]), ma: clamp(ma, DRIVER_CAP[0], DRIVER_CAP[1]), detail, capped };
   }
   FQ.driverMultipliers = driverMultipliers;
+
+  /* --------------------------------------------------- forces d'équipe complémentaires (drivers) */
+  /**
+   * Deux familles de forces, calculées comme le modèle de buts (attaque × défense × avantage du terrain, pondération temporelle),
+   * mais sur d'autres observations des matchs passés :
+   * - « sot » : tirs cadrés (football-data), convertis en buts au taux de conversion de la compétition ;
+   * - « odds » : buts attendus implicites des cotes d'avant-match des matchs passés (ce que le marché pensait des équipes,
+   *   donc transferts, blessures et forme déjà intégrés). Jamais la cote du match à prédire.
+   * Seuls les matchs strictement antérieurs à asOf servent. Retour : { att, def, home, mu, conv } ou null.
+   */
+  const pmf = (k, l) => { let f = 1; for (let i = 2; i <= k; i++) f *= i; return Math.exp(-l) * Math.pow(l, k) / f; };
+  let INV_GRID = null;
+  function impliedLambdas(odds) {
+    if (!odds || !isNum(odds.h) || !isNum(odds.d) || !isNum(odds.a)) return null;
+    if (!INV_GRID) {
+      INV_GRID = [];
+      for (let lh = 0.2; lh <= 4.01; lh += 0.05) for (let la = 0.2; la <= 4.01; la += 0.05) {
+        let p1 = 0, pN = 0; for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) { const v = pmf(i, lh) * pmf(j, la); if (i > j) p1 += v; else if (i === j) pN += v; }
+        INV_GRID.push([lh, la, p1, 1 - p1 - pN]);
+      }
+    }
+    const inv = [1 / odds.h, 1 / odds.d, 1 / odds.a], t = inv[0] + inv[1] + inv[2], p1 = inv[0] / t, p2 = inv[2] / t;
+    let b = null, bd = Infinity;
+    for (const g of INV_GRID) { const d = (g[2] - p1) * (g[2] - p1) + (g[3] - p2) * (g[3] - p2); if (d < bd) { bd = d; b = g; } }
+    return [b[0], b[1]];
+  }
+  FQ.impliedLambdas = impliedLambdas;
+  const RATING_CACHE = new Map();
+  function fitRatings(allMatches, comp, asOf, family, halfLife) {
+    const key = comp + "|" + asOf + "|" + family + "|" + allMatches.length;
+    if (RATING_CACHE.has(key)) return RATING_CACHE.get(key);
+    const hl = halfLife || (family === "odds" ? 120 : 240);
+    const W = [], teams = {};
+    let sw = 0, sh = 0, sa = 0, g = 0, st = 0;
+    for (const m of allMatches) {
+      if (m.comp !== comp || m.hg === null || !(m.date < asOf)) continue;
+      const age = daysBetween(m.date, asOf); if (age > 500) continue;
+      let x = null;
+      if (family === "sot") { if (m.sot) { x = m.sot; g += m.hg + m.ag; st += m.sot[0] + m.sot[1]; } }
+      else if (family === "odds") { if (!m._il && m.odds) m._il = impliedLambdas(m.odds) || 0; x = m._il || null; }
+      if (!x) continue;
+      const w = Math.pow(0.5, age / hl);
+      W.push([m.home, m.away, w, x[0], x[1]]); teams[m.home] = 1; teams[m.away] = 1; sw += w; sh += w * x[0]; sa += w * x[1];
+    }
+    let out = null;
+    if (sw >= 20 && sa > 0) {
+      const att = {}, def = {}, n = {}; for (const t in teams) { att[t] = 1; def[t] = 1; n[t] = 0; }
+      const home = sh / sa, mu = sa / sw;
+      for (const [h, a, w] of W) { n[h] += w; n[a] += w; }
+      for (let it = 0; it < 25; it++) {
+        const nA = {}, dA = {}, nD = {}, dD = {};
+        for (const t in teams) { nA[t] = 0.5; dA[t] = 0.5; nD[t] = 0.5; dD[t] = 0.5; } // a priori : un demi-match moyen
+        for (const [h, a, w, xh, xa] of W) {
+          nA[h] += w * xh; dA[h] += w * mu * home * def[a]; nA[a] += w * xa; dA[a] += w * mu * def[h];
+          nD[a] += w * xh; dD[a] += w * mu * home * att[h]; nD[h] += w * xa; dD[h] += w * mu * att[a];
+        }
+        for (const t in teams) { att[t] = nA[t] / dA[t]; def[t] = nD[t] / dD[t]; }
+      }
+      out = { att, def, home, mu, n, conv: family === "sot" ? (st ? g / st : 0.3) : 1 };
+    }
+    if (RATING_CACHE.size > 4000) RATING_CACHE.clear();
+    RATING_CACHE.set(key, out);
+    return out;
+  }
+  FQ.fitRatings = fitRatings;
+  /**
+   * Buts attendus d'un match par famille de forces. Une famille est absente si l'une des équipes y a moins d'un match pondéré.
+   */
+  function driverLambdas(allMatches, match, asOf, cfg) {
+    const out = {};
+    for (const fam of ["sot", "odds"]) {
+      const F = fitRatings(allMatches, match.comp, asOf, fam, cfg && cfg.hl && cfg.hl[fam]);
+      if (!F || !F.att[match.home] || !F.att[match.away] || F.n[match.home] < 1 || F.n[match.away] < 1) continue;
+      const hm = match.neutral ? 1 : F.home;
+      out[fam] = [F.conv * F.mu * hm * F.att[match.home] * F.def[match.away], F.conv * F.mu * F.att[match.away] * F.def[match.home]];
+    }
+    return out;
+  }
+  FQ.driverLambdas = driverLambdas;
+  /** Combinaison géométrique des buts attendus : poids appris (goals = modèle de buts), renormalisés sur les familles disponibles */
+  function combineLambdas(lh, la, dl, w) {
+    if (!w) return null;
+    let tw = w.goals || 0, xh = (w.goals || 0) * Math.log(lh), xa = (w.goals || 0) * Math.log(la);
+    for (const fam of ["sot", "odds"]) if (w[fam] && dl[fam]) { tw += w[fam]; xh += w[fam] * Math.log(dl[fam][0]); xa += w[fam] * Math.log(dl[fam][1]); }
+    if (!(tw > 0)) return null;
+    return [Math.exp(xh / tw), Math.exp(xa / tw)];
+  }
+  FQ.combineLambdas = combineLambdas;
 
   /* --------------------------------------------------- matrice des scores */
   function scoreMatrix(lh, la, rho, maxG) {

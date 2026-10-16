@@ -47,7 +47,8 @@
         rows.push({ id: m.id, comp, date: d, home: m.home, away: m.away, p3: [pr.markets.p1, pr.markets.pN, pr.markets.p2], pB: pr.markets.bttsYes,
           k: m.hg > m.ag ? 0 : m.hg === m.ag ? 1 : 2, bt: m.hg > 0 && m.ag > 0 ? 1 : 0, rel: FQ.reliability(model, m, {}).score, rho: pr.rho, o, c,
           oIsClose: !!(m.odds && /clôture/.test(m.odds.src || "")), lh: pr.lambdaHome, la: pr.lambdaAway,
-          pO: U2.isNum(pr.markets.over25) ? pr.markets.over25 : null, ou: m.ou25 ? [m.ou25.o, m.ou25.u] : null, t: m.hg + m.ag > 2 ? 1 : 0 });
+          pO: U2.isNum(pr.markets.over25) ? pr.markets.over25 : null, ou: m.ou25 ? [m.ou25.o, m.ou25.u] : null, t: m.hg + m.ag > 2 ? 1 : 0,
+          dl: FQ.driverLambdas ? FQ.driverLambdas(matches, m, d) : {} });
       }
     }
     return rows;
@@ -312,6 +313,25 @@
       train.push(...trR); val.push(...vaR); test.push(...teR);
       o.onLog(`${comp} : ${trR.length} appr. + ${vaR.length} valid. + ${teR.length} test, paramètres ${accepted ? JSON.stringify(best.g) : "par défaut"} (${Math.round((Date.now() - t0) / 1000)} s)`);
     }
+    let applyDrivers = (rows) => rows;
+    // drivers : forces tirées des tirs cadrés et des cotes passées, combinées au modèle de buts (poids appris sur l'apprentissage,
+    // gardés seulement si la validation s'améliore) ; ils remplacent alors les probabilités du modèle seul pour la suite
+    {
+      const withMk = (r, lh, la) => { const mk = FQ.marketsFromMatrix(FQ.scoreMatrix(lh, la, r.rho || 0, 10)); return { p3: [mk.p1, mk.pN, mk.p2], pB: mk.bttsYes, pO: mk.over25 }; };
+      const llW = (rows, w) => mean(rows, (r) => { const c = FQ.combineLambdas(r.lh, r.la, r.dl || {}, w); const p = c ? withMk(r, c[0], c[1]).p3 : r.p3; return FQ.metrics.logLoss3(p, r.k); });
+      const grid = [];
+      for (let a = 0; a <= 1.0001; a += 0.1) for (let b = 0; b <= 1.0001 - a; b += 0.1) grid.push({ goals: Math.round(a * 10) / 10, sot: Math.round(b * 10) / 10, odds: Math.round((1 - a - b) * 10) / 10 });
+      let best = null; for (const w of grid) { const l = llW(train, w); if (!best || l < best.l) best = { w, l }; }
+      const base = { goals: 1, sot: 0, odds: 0 };
+      const dv = val.map((r) => { const c = FQ.combineLambdas(r.lh, r.la, r.dl || {}, best.w); const p = c ? withMk(r, c[0], c[1]).p3 : r.p3; return FQ.metrics.logLoss3(p, r.k) - FQ.metrics.logLoss3(r.p3, r.k); });
+      const acc = val.length >= 100 && mean(dv, (x) => x) < 0;
+      out.drivers = { w: best.w, accepted: acc, trainLL: best.l, trainLLGoals: llW(train, base), valLL: llW(val, best.w), valLLGoals: llW(val, base), valDiff: { mean: mean(dv, (x) => x), ci: bootRoi(dv, 800) },
+        testLL: llW(test, best.w), testLLGoals: llW(test, base), coverage: { sot: mean(train.concat(val), (r) => (r.dl && r.dl.sot ? 1 : 0)), odds: mean(train.concat(val), (r) => (r.dl && r.dl.odds ? 1 : 0)) },
+        families: { sot: "tirs cadrés (football-data), convertis en buts", odds: "buts attendus implicites des cotes d'avant-match des matchs passés" } };
+      o.onLog(`Drivers : poids ${JSON.stringify(best.w)} ; validation ${out.drivers.valLLGoals.toFixed(4)} → ${out.drivers.valLL.toFixed(4)} ${acc ? "gardés" : "rejetés"}`);
+      applyDrivers = (rows) => { if (acc) for (const r of rows) { const c = FQ.combineLambdas(r.lh, r.la, r.dl || {}, best.w); if (!c) continue; const x = withMk(r, c[0], c[1]); r.p3 = x.p3; r.pB = x.pB; r.pO = x.pO; r.lh = c[0]; r.la = c[1]; } return rows; };
+      applyDrivers(train.concat(val, test));
+    }
     const fit = train.concat(val); // le passé : apprentissage + validation
     // calibration : apprise sur l'apprentissage, gardée si la validation s'améliore, puis réajustée sur le passé
     const fitT = (rows, kind) => {
@@ -406,6 +426,7 @@
     if (o.postTo && o.postTo > o.testTo) {
       const post = [];
       for (const comp of Object.keys(out.leagues)) post.push(...predictRange(matches, comp, o.testTo, o.postTo, out.leagues[comp].params || {}));
+      applyDrivers(post);
       const pB = blendRows(calRows(post)).filter(oddsOf);
       out.post = { from: o.testTo, to: o.postTo, n: pB.length, llFinal: pB.length ? mean(pB, (r) => FQ.metrics.logLoss3(r.p3, r.k)) : null,
         llMarket: pB.length ? mean(pB, (r) => FQ.metrics.logLoss3(r.pK3, r.k)) : null, llModel: pB.length ? mean(pB, (r) => FQ.metrics.logLoss3(r.pM3, r.k)) : null };

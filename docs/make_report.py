@@ -200,6 +200,13 @@ story.append(P(f"Les cotes sont converties en probabilités en retirant la marge
                f"Sur le test final, la puissance aurait été un peu meilleure ({fr(DV['testPower'],4)} contre {fr(DV['testNorm'],4)}) ; la règle n'en tient volontairement pas compte, sinon le test ne serait plus un test. "
                f"Le poids du modèle dans le mélange est appris : {int(100*B['w'])} % en général, {', '.join(f'{int(100*w)} % en {COMP[c]}' for c, w in B['byComp'].items())}, car c'est là seulement que la validation l'a justifié. "
                f"Pour les buts (±2,5), le marché seul est meilleur que le modèle ({fr(BG['testMarketLL'],4)} contre {fr(BG['testModelLL'],4)}) : poids 0 %."))
+DRV = T.get("drivers") or {}
+if DRV:
+    story.append(P("Étage 1 bis · Forces complémentaires (drivers)", "h2"))
+    story.append(P(f"Deux autres lectures des matchs passés complètent le modèle de buts : les tirs cadrés (football-data) et les buts attendus implicites des cotes d'avant-match des matchs passés, qui contiennent ce que le marché savait des équipes (transferts, blessures, forme). "
+                   f"La cote du match à prédire n'est jamais utilisée. Poids appris sur l'apprentissage : buts {pc(DRV['w']['goals'])}, tirs cadrés {pc(DRV['w']['sot'])}, cotes passées {pc(DRV['w']['odds'])} ; "
+                   f"validation {fr(DRV['valLLGoals'],4)} → {fr(DRV['valLL'],4)}, donc {'gardés' if DRV['accepted'] else 'rejetés'}. Sur le test final (mesuré seulement), notre modèle passe de {fr(DRV['testLLGoals'],4)} à {fr(DRV['testLL'],4)}. "
+                   "Conséquence à connaître : notre modèle n'est plus indépendant des bookmakers, puisqu'il apprend des cotes passées ; la page le dit pour chaque pronostic."))
 story.append(P("Étage 4 · Fiabilité et joueurs", "h2"))
 story.append(P("Un score de fiabilité (0–100) tient compte du nombre de matchs observés, des résultats manquants et de la fraîcheur des données. Il exclut les matchs douteux des tickets. "
                "Les probabilités de buteur et de joueur décisif viennent de la part de buts de chaque joueur appliquée aux buts attendus de son équipe."))
@@ -296,6 +303,8 @@ story.append(table([
     ["Jours de repos (écart domicile − extérieur, borné 2–8 j)", "β = 0 sur le modèle ; −0,01 sur le marché", "−0,0002 (−0,0006 à +0,0005)", "Rejeté : rien de démontré"],
     ["Repos court (3 jours ou moins)", "β = 0 sur le modèle ; −0,03 sur le marché", "−0,0003 (−0,0006 à 0,0000)", "Rejeté : intervalle qui touche zéro"],
     ["Congestion (matchs joués sur 21 jours)", "β = 0", "0", "Rejeté"],
+    ["Tirs cadrés (forces d'équipe)", "poids " + pc(DRV.get("w", {}).get("sot")), "rien de plus une fois les cotes passées prises", "Testé, poids nul"],
+    ["Cotes des matchs passés (forces d'équipe)", "poids " + pc(DRV.get("w", {}).get("odds")), f"{fr(DRV.get('valDiff', {}).get('mean'),4)} (IC {fr((DRV.get('valDiff', {}).get('ci') or [None, None])[0],4)} à {fr((DRV.get('valDiff', {}).get('ci') or [None, None])[1],4)})", "Gardé"],
 ], [56 * mm, 40 * mm, 46 * mm, 28 * mm]))
 story.append(P("Limite : nos calendriers ne contiennent pas les coupes nationales ni la Ligue Europa et la Conférence, donc le repos est mal mesuré pour les équipes engagées partout. Le script est dans tools/driver_repos.js.", "small"))
 story.append(table([
@@ -368,7 +377,7 @@ story.append(table([
     ["P1 · Sanctuariser la validation", "Opérationnel", "Test final figé au 16/10/2026 (référence) ; registre prospectif des prévisions réellement émises, évalué par horizon et par version avec IC. Fuites vérifiées dans le code : modèle, classements, buteurs et forme n'utilisent que les matchs antérieurs. Réserve : au Brésil, au Japon et en Suisse, l'historique ne fournit que la cote de clôture, connue au coup d'envoi seulement."],
     ["P2 · Historiser toutes les prévisions", "Opérationnel", "Un instantané par horizon (J-14, J-7, J-3, J-1, J-0) et un au coup d'envoi, jamais réécrits. Les versions intermédiaires entre deux horizons ne sont pas gardées (volume)."],
     ["Battre le marché", "En place, à mesurer", "Pinnacle relevé comme cote juste ; value bets aux prix français mesurées à la clôture (CLV). Quatre tentatives de faire mieux que le marché par le modèle : toutes rejetées sur la validation."],
-    ["P3 · Drivers gratuits", "Partiel", "Repos et congestion testés et rejetés (rien de démontré). Blessures et compositions : API-Football gratuite à tester (compte requis). xG : pas de source gratuite sans aspiration de site."],
+    ["P3 · Drivers gratuits", "Partiel", "Gardé : forces lues dans les cotes des matchs passés (modèle seul au niveau du marché sur le test, écart non significatif). Testés sans effet : tirs cadrés, repos, congestion. Blessures et compositions : API-Football gratuite à tester (compte requis). xG : seulement depuis 2026-27 chez football-data, trop court pour apprendre."],
     ["P4 · Indépendance face aux bookmakers", "Opérationnel", "Chaque pronostic affiche modèle seul, marché, retenue, poids appliqué, écart et origine du choix ; une probabilité tirée du marché est dite comme telle."],
     ["P5 · Tickets et corrélations", "Opérationnel", "Une sélection par match ; annoncé contre observé ; comparaison par nombre de sélections ; politique de choix rejouée sans regarder l'avenir ; « aucun ticket admissible » sous un seuil d'espérance."],
     ["P6 · Cotes et rentabilité", "Opérationnel", "Provenance distinguée (collectée, historique Bet 365, reconstruite, estimée *, saisie) ; résultats refaits sans approximation."],

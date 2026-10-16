@@ -86,7 +86,9 @@
       // plus/moins de 2,5 buts d'avant-match (Bet 365, sinon moyenne du marché)
       const ou = (() => { for (const k of ["B365", "Avg", "P"]) { const o = num(r[k + ">2.5"]), u = num(r[k + "<2.5"]); if (o && u) return [o, u, k]; } return null; })();
       const xg = num(r.HxG) !== null || r.HxG === "0" ? [parseFloat(r.HxG), parseFloat(r.AxG)] : null;
-      out.push([div, date, r.Time || "", home, away, hg === "" || hg === undefined ? null : +hg, ag === "" || ag === undefined ? null : +ag, pre, close, xg, r.Season || null, closeRef, ou]);
+      // tirs cadrés (domicile, extérieur) : driver des forces d'équipe, publié par football-data pour les championnats européens
+      const sot = /^\d+$/.test(r.HST || "") && /^\d+$/.test(r.AST || "") ? [+r.HST, +r.AST] : null;
+      out.push([div, date, r.Time || "", home, away, hg === "" || hg === undefined ? null : +hg, ag === "" || ag === undefined ? null : +ag, pre, close, xg, r.Season || null, closeRef, ou, sot]);
     }
     return out;
   }
@@ -207,6 +209,7 @@
         if (r[12]) ex.ou25 = { o: r[12][0], u: r[12][1], src: `football-data.co.uk (${r[12][2] === "B365" ? "Bet 365" : r[12][2] === "Avg" ? "moyenne du marché" : "Pinnacle"}, avant-match)` };
         if (!ex.odds && r[8] && m.row[6] !== null) ex.oddsIsClose = 1;
         if (r[9] && Number.isFinite(r[9][0])) ex.xg = r[9];
+        if (r[13]) ex.sot = r[13];
         joined++;
       }
     }

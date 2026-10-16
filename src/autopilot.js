@@ -19,7 +19,19 @@
       extraMult = { h: flags[match.home] ? Math.exp(stk.beta) : 1, a: flags[match.away] ? Math.exp(stk.beta) : 1 };
       stakeInfo = { beta: stk.beta, home: !!flags[match.home], away: !!flags[match.away] };
     }
-    const pr = FQ.predictMatch(model, match, { drivers: opts.drivers, neutral: opts.neutral, manualLambda: opts.manualLambda, calibration: ctx.state.calibration, extraMult });
+    let pr = FQ.predictMatch(model, match, { drivers: opts.drivers, neutral: opts.neutral, manualLambda: opts.manualLambda, calibration: ctx.state.calibration, extraMult });
+    // forces complémentaires (tirs cadrés, cotes des matchs passés) combinées au modèle de buts, si l'entraînement les a validées
+    const DR = FQ.TRAINED && FQ.TRAINED.drivers;
+    if (pr.ok && DR && DR.accepted && !opts.manualLambda && FQ.driverLambdas) {
+      const dl = FQ.driverLambdas(ctx.matches, match, asOf);
+      const c = FQ.combineLambdas(pr.lambdaHome, pr.lambdaAway, dl, DR.w);
+      if (c) {
+        const em = { h: (extraMult ? extraMult.h : 1) * c[0] / pr.lambdaHome, a: (extraMult ? extraMult.a : 1) * c[1] / pr.lambdaAway };
+        const goals = [pr.lambdaHome, pr.lambdaAway];
+        pr = FQ.predictMatch(model, match, { drivers: opts.drivers, neutral: opts.neutral, calibration: ctx.state.calibration, extraMult: em });
+        if (pr.ok) pr.driverInfo = { w: DR.w, goals: goals.map((x) => Math.round(x * 100) / 100), sot: dl.sot ? dl.sot.map((x) => Math.round(x * 100) / 100) : null, odds: dl.odds ? dl.odds.map((x) => Math.round(x * 100) / 100) : null };
+      }
+    }
     // mélange au marché (poids appris sur l'historique) quand une cote 1N2 est connue
     const bl = FQ.TRAINED && FQ.TRAINED.blend;
     const po = probOdds(match);
@@ -103,7 +115,7 @@
       dataVersion: ctx.dataVersion ? ctx.dataVersion(match.comp) : null,
       origin: opts.origin || "manuel",
       stakeEffect: b.stakeInfo || null,
-      blend: b.pr.blendInfo || null, modelMarkets: b.pr.modelMarkets || null,
+      blend: b.pr.blendInfo || null, modelMarkets: b.pr.modelMarkets || null, driverInfo: b.pr.driverInfo || null,
       matchOdds: match.odds || null,
     };
     pred.pick = pickFor(ctx, match, mk, b.rel.score, oddsMap);

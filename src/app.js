@@ -452,7 +452,7 @@ window.__fqStartApp = function () {
           ["Value bet", "Pari dont la cote française est assez au-dessus de la cote juste (celle de Pinnacle quand elle est relevée) pour une espérance d'au moins +" + evMin + " %, avec une fiabilité suffisante. C'est la seule situation où un pari est intéressant à long terme. Rare : les cotes françaises sont presque toujours sous la cote juste."],
           ["Intéressant dès", "Cote minimale pour une espérance d'au moins +" + evMin + " % : (1 + " + evMin + " %) ÷ probabilité."],
           ["Rendement d'une sélection", "Probabilité × cote. 1 = prix juste ; 0,90 = le bookmaker garde 10 %. La chance d'un ticket = produit des rendements ÷ cote totale."],
-          ["Modèle seul / marché", "Modèle seul : notre estimation à partir des résultats et des buts, sans les cotes. Marché : la cote de référence la plus juste disponible (Pinnacle, sinon une bourse, sinon Bet 365 ou la médiane française), marge retirée. Quand ils divergent de plus de 8 points, c'est le plus souvent le marché qui avait raison."],
+          ["Modèle / marché", "Notre modèle : estimation sans la cote du match, à partir des buts et des forces lues dans les cotes des matchs passés (driver validé sur l'historique). Marché : la cote de référence la plus juste disponible (Pinnacle, sinon une bourse, sinon Bet 365 ou la médiane française), marge retirée. Quand ils divergent de plus de 8 points, c'est le plus souvent le marché qui avait raison."],
           ["Prudence", "Quand modèle et marché divergent, la chance d'une sélection est diminuée pour construire les tickets."],
           ["Correction d'une stratégie", "Tickets gagnés ÷ tickets annoncés par cette stratégie dans le passé. Au-dessus de 1 : ses tickets passent plus souvent qu'annoncé."],
           ["Multiboost", "Bonus de cote Betclic selon le nombre de sélections. Désactivé par défaut (Paramètres)."],
@@ -1421,11 +1421,11 @@ window.__fqStartApp = function () {
     const gap = q.mk !== null && q.mo !== null ? Math.abs(q.mo - q.mk) : null;
     const origin = w === 0 ? "la probabilité retenue est celle du marché (le modèle n'a pas montré qu'il faisait mieux dans cette compétition)" : w === 1 ? "pas de cote pour ce marché : probabilité du modèle seul, moins sûre" : `mélange : ${Math.round(100 * w)} % modèle, ${Math.round(100 * (1 - w))} % marché`;
     return html`<div className="srcbox tiny mt-1">
-      <span><span className="muted">Modèle sportif seul</span> <b className="mono">${q.mo === null ? pct(pick.p, 0) : pct(q.mo, 0)}</b></span>
+      <span><span className="muted">Notre modèle (sans la cote de ce match)</span> <b className="mono">${q.mo === null ? pct(pick.p, 0) : pct(q.mo, 0)}</b></span>
       <span><span className="muted">Marché sans marge</span> <b className="mono">${q.mk === null ? "—" : pct(q.mk, 0)}</b></span>
       <span><span className="muted">Retenue</span> <b className="mono">${pct(pick.p, 0)}</b></span>
       ${gap !== null && html`<span className=${gap >= 0.08 ? "t-warn" : ""}><span className="muted">Écart modèle / marché</span> <b className="mono">${Math.round(100 * gap)} pts</b></span>`}
-      <div className="muted mt-1">${origin}. Choix : ${pick.kind === "value" ? "value bet (cote au-dessus du seuil)" : "issue la plus probable (pas de value bet)"}.</div></div>`;
+      <div className="muted mt-1">${origin}. Choix : ${pick.kind === "value" ? "value bet (cote au-dessus du seuil)" : "issue la plus probable (pas de value bet)"}.${pred.driverInfo ? ` Notre modèle combine ${Object.entries(pred.driverInfo.w).filter(([, v]) => v > 0).map(([k, v]) => `${Math.round(100 * v)} % ${{ goals: "buts marqués et encaissés", sot: "tirs cadrés", odds: "forces lues dans les cotes des matchs passés" }[k]}`).join(", ")} : il n'utilise jamais la cote du match lui-même, mais dépend en partie de ce que le marché pensait des équipes les semaines précédentes.` : ""}</div></div>`;
   }
 
   /** Filtres et tri des pronostics (mémorisés dans ce navigateur) */
@@ -1904,7 +1904,8 @@ window.__fqStartApp = function () {
       <p className="muted small lead">Le système se réentraîne chaque semaine sur les vrais matchs, en trois périodes : apprentissage (il ajuste), validation (elle décide si un réglage est gardé), test final (mesuré seulement, jamais utilisé pour choisir). Chaque semaine terminée est auditée : pronostics, tickets joués et fantômes, tes paris réels et tes tests.</p>
       <div className="eyebrow mt-2">Qualité des probabilités 1N2 · test final · log loss (plus bas = meilleur)</div>
       ${dv ? html`<${TableWrap}><table className="tbl tiny"><thead><tr><th>Méthode</th><th>Log loss</th></tr></thead><tbody>
-        <tr><td>Modèle seul</td><td className="mono">${fr(bl.testModelLL, 4)}</td></tr>
+        ${T.drivers && html`<tr><td>Modèle de buts seul (version d'origine)</td><td className="mono">${fr(T.drivers.testLLGoals, 4)}</td></tr>`}
+        <tr><td>Notre modèle${T.drivers && T.drivers.accepted ? " (buts + forces des cotes passées)" : " seul"}, sans la cote du match</td><td className="mono">${fr(bl.testModelLL, 4)}</td></tr>
         <tr><td>Marché, marge retirée à parts égales</td><td className="mono">${fr(dv.testNorm, 4)}</td></tr>
         <tr><td>Marché, marge retirée surtout sur les outsiders (puissance)</td><td className="mono">${fr(dv.testPower, 4)}</td></tr>
         <tr className="hl"><td><b>Retenu : ${bl.devig === "power" ? "puissance" : "parts égales"}${Object.keys(bl.byComp || {}).length ? ` + modèle mêlé pour ${Object.entries(bl.byComp).map(([c, w]) => `${SHORT[c] || c} (${Math.round(100 * w)} %)`).join(", ")}` : ""}</b></td><td className="mono"><b>${fr((T.summary0 || {}).testLLFinal, 4)}</b></td></tr>
@@ -2099,6 +2100,13 @@ window.__fqStartApp = function () {
         <${Stat} label="Paris automatiques" value=${P.autoBetting ? "autorisés" : "suspendus"} sub=${P.autoBetting ? "stratégie rentable sur l'apprentissage et confirmée" : "aucune stratégie rentable sur l'apprentissage"} tone=${P.autoBetting ? "pos" : "warn"} />
       </div>
       <div className="note small mt-2"><b>Ce que l'historique montre.</b> Le modèle (Poisson-Dixon-Coles réglé par compétition) bat nettement la référence naïve dans toutes les compétitions, mais il reste moins précis que les cotes du marché (log loss ${r4(B.testModelLL)} contre ${r4(B.testMarketLL)} sur le test). Le mélange optimal appris donne donc ${pct(1 - B.w, 0)} du poids au marché quand une cote existe. Conséquence directe : les « value bets » signalées par le modèle seul ont perdu de l'argent sur 12 mois, l'agent a appris à les refuser, et aucune mise automatique n'est engagée tant qu'une stratégie ne devient pas rentable sur l'apprentissage puis confirmée sur le test. Les choix préférentiels restent publiés pour chaque match.</div>
+      ${T.drivers && html`<div className="mt-2"><div className="eyebrow">Drivers testés (forces d'équipe complémentaires)</div>
+        <${TableWrap}><table className="tbl small"><thead><tr><th>Famille</th><th>Poids appris</th><th>Disponible</th></tr></thead><tbody>
+          <tr><td>Buts marqués et encaissés (modèle d'origine)</td><td className="mono">${pct(T.drivers.w.goals, 0)}</td><td className="mono">100 %</td></tr>
+          <tr><td>Tirs cadrés (football-data)</td><td className="mono">${pct(T.drivers.w.sot, 0)}</td><td className="mono">${pct(T.drivers.coverage.sot, 0)}</td></tr>
+          <tr><td>Forces lues dans les cotes des matchs passés</td><td className="mono">${pct(T.drivers.w.odds, 0)}</td><td className="mono">${pct(T.drivers.coverage.odds, 0)}</td></tr>
+        </tbody></table><//>
+        <div className="muted tiny mt-1">Poids appris sur l'apprentissage ; validation : log loss ${r4(T.drivers.valLLGoals)} avec les buts seuls → ${r4(T.drivers.valLL)} avec les drivers (écart ${sgn(T.drivers.valDiff.mean, 4)}${T.drivers.valDiff.ci ? `, IC ${sgn(T.drivers.valDiff.ci[0], 4)} à ${sgn(T.drivers.valDiff.ci[1], 4)}` : ""}) : ${T.drivers.accepted ? "gardés" : "rejetés"}. Test final, mesuré seulement : ${r4(T.drivers.testLLGoals)} → ${r4(T.drivers.testLL)}. Les tirs cadrés n'apportent rien de plus une fois les cotes passées prises en compte.</div></div>`}
       <div className="grid-2 mt-2">
         <div><div className="eyebrow">Par compétition (test)</div>
           <${TableWrap}><table className="tbl small"><thead><tr><th>Comp.</th><th>Appr.</th><th>Test</th><th>Réglage</th><th>LL modèle</th><th>LL naïve</th><th>LL marché</th><th>Précision</th></tr></thead>

@@ -1,6 +1,6 @@
 {
  "frozenAt": "2026-10-16",
- "note": "Référence historique figée : ce test a été consulté pendant le développement ; il ne sert plus à aucun choix.",
+ "note": "Période de test figée au 16/10/2026 (consultée pendant le développement) : elle ne sert plus à aucun choix. Chaque version y est seulement mesurée ; les choix se font sur la validation.",
  "protocol": {
   "trainFrom": "2025-07-01",
   "valFrom": "2026-03-01",
@@ -727,6 +727,34 @@
      "yield": 1.0630188679245283
     },
     "ticketEq": 0.7157154493332907
+   }
+  }
+ ],
+ "versions": [
+  {
+   "version": "1.0.0/2026-10-16 (buts seuls)",
+   "testLLFinal": 0.9884746494841393,
+   "testMarketLL": 0.9884651639312529,
+   "testModelLL": 1.0081841841690413
+  },
+  {
+   "version": "1.0.0/2026-10-16 + drivers (cotes passées 90 %, buts 10 %), acceptés sur la validation",
+   "testLLFinal": 0.9883016669389783,
+   "testMarketLL": 0.9884651639312529,
+   "testModelLL": 0.9922284109831249,
+   "diffFinalVsMarket": {
+    "mean": -0.00016349699227500515,
+    "ci": [
+     -0.0008075882957528807,
+     0.0013499561249532195
+    ]
+   },
+   "diffModelVsMarket": {
+    "mean": 0.003763247051873234,
+    "ci": [
+     -0.002169105924152343,
+     0.018221817979296256
+    ]
    }
   }
  ]

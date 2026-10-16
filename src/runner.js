@@ -143,7 +143,8 @@ ingest.inbox = inboxIds.length;
 {
   const got = {};
   // saisons passées déjà stockées mais sans cotes ±2,5 (format antérieur) : retéléchargées une fois
-  const older = Object.entries(raw.fd || {}).filter(([k, rows]) => /^mmz4281\//.test(k) && rows.length && !rows.some((r) => r[12])).map(([k]) => k);
+  // anciennes saisons à recharger : sans cotes ±2,5 ou sans tirs cadrés (ajoutés le 16/10/2026)
+  const older = Object.entries(raw.fd || {}).filter(([k, rows]) => /^mmz4281\//.test(k) && rows.length && (!rows.some((r) => r[12]) || !rows.some((r) => r[13]))).map(([k]) => k);
   for (const key of [...new Set(E.fdFilesFor(today).concat(older))]) {
     net.fd.tried++;
     const r = get(E.fdUrl(key));
@@ -271,7 +272,10 @@ newMeta.planDoc = planId;
 fs.writeFileSync(path.join(out, "meta.json"), JSON.stringify(newMeta));
 const keep = new Set([...sIds, ...rIds, ...tIds, "meta", planId]);
 const existing = fs.existsSync(autoDir) ? fs.readdirSync(autoDir).map((f) => f.replace(/\.json$/, "")) : [];
-const old = existing.filter((id) => !keep.has(id) && (/^[srtd]g?\d+_\d+$/.test(id) || /^plan_/.test(id) || /^in_[\w-]+$/.test(id) || /^code_/.test(id)));
+// ne jamais supprimer un document plus récent que l'état lu (la page peut être en train d'écrire au même moment)
+const revOf = (id) => { const m = /^(?:[srtd]g?|plan_g?)(\d+)/.exec(id); return m ? +m[1] : null; };
+const old = existing.filter((id) => !keep.has(id) && (/^[srtd]g?\d+_\d+$/.test(id) || /^plan_/.test(id) || /^in_[\w-]+$/.test(id) || /^code_/.test(id))
+  && !(revOf(id) !== null && revOf(id) > ((meta && meta.rev) || 0)));
 const cutHb = new Date(Date.now() - 3 * 864e5).toISOString().replace(/\D/g, "").slice(0, 12);
 const hbOld = existing.filter((id) => /^(hb|err)_\d+$/.test(id) && id.slice(id.indexOf("_") + 1) < cutHb);
 const batches = []; for (let i = 0; i < writes.length; i += 5) batches.push(writes.slice(i, i + 5));

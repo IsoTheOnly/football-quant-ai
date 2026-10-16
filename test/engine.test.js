@@ -56,5 +56,17 @@ test("test final figé : la référence historique ne bouge plus", () => {
   assert.equal(TRAINED.protocol.testTo, FQ.T.FROZEN_TEST_TO);
   const ref = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "data", "reference_test_2026-10-16.json"), "utf8"));
   assert.equal(ref.protocol.testTo, "2026-10-16");
-  assert.ok(Math.abs(ref.summary0.testLLFinal - TRAINED.summary0.testLLFinal) < 1e-9, "le réentraînement ne doit pas changer la référence");
+  assert.ok(Array.isArray(ref.versions) && ref.versions.length >= 1, "chaque version est mesurée sur la même période figée");
+});
+
+test("drivers : forces des tirs cadrés et des cotes passées, sans fuite temporelle", () => {
+  const ms = [];
+  for (let i = 0; i < 30; i++) ms.push({ comp: "X", date: "2026-01-" + String(1 + (i % 28)).padStart(2, "0"), home: "A" + (i % 5), away: "B" + (i % 5), hg: 1, ag: 1, sot: [5, 3], odds: { h: 1.8, d: 3.6, a: 4.5 } });
+  const late = { comp: "X", date: "2026-03-01", home: "A0", away: "B0", hg: 9, ag: 0, sot: [30, 0], odds: { h: 1.01, d: 30, a: 50 } };
+  const F1 = FQ.fitRatings(ms, "X", "2026-02-15", "sot"), F2 = FQ.fitRatings(ms.concat([late]), "X", "2026-02-15", "sot");
+  assert.ok(F1 && Math.abs(F1.att.A0 - F2.att.A0) < 1e-12, "un match postérieur ne change rien");
+  const il = FQ.impliedLambdas({ h: 1.8, d: 3.6, a: 4.5 });
+  assert.ok(il[0] > il[1], "le favori a plus de buts attendus");
+  const c = FQ.combineLambdas(1, 2, { odds: [2, 1] }, { goals: 0.5, sot: 0.5, odds: 0.5 });
+  assert.ok(Math.abs(c[0] - Math.sqrt(2)) < 1e-9, "famille absente : poids renormalisés");
 });

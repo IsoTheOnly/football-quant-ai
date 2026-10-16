@@ -94,6 +94,7 @@ Validation chronologique en trois périodes : apprentissage (01/07/2025 → 28/0
 
 - Le test final (01/07 → 15/10/2026) a été consulté pendant le développement : il est figé comme référence historique (`data/reference_test_2026-10-16.json`, `FQ.T.FROZEN_TEST_TO`) et ne sert plus à aucun choix.
 - Journal des prévisions (`state.forecastLog`, jamais réécrit) : un instantané par match et par horizon (J-14, J-7, J-3, J-1, J-0), plus la dernière prévision avant le coup d'envoi, avec modèle seul, marché, retenue, poids, choix, cote, source, fiabilité et inclusion dans un ticket. Évalué par horizon et par version (Performance › Suivi prospectif). Les lignes de plus de 120 jours passent dans des totaux archivés.
+- Drivers gardés : forces d'équipe lues dans les cotes d'avant-match des matchs passés (`FQ.fitRatings`, `FQ.driverLambdas`), combinées au modèle de buts avec des poids appris (actuellement 90 % / 10 %) ; notre modèle n'est donc plus indépendant des bookmakers (affiché). Tirs cadrés (football-data, colonnes HST / AST) : testés, poids nul.
 - Drivers : chaque candidat est construit sans fuite, appris sur l'apprentissage, gardé seulement s'il améliore la validation. Repos et congestion : rejetés (`tools/driver_repos.js`).
 
 ## Tickets

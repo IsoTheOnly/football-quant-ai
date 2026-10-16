@@ -310,7 +310,7 @@ test("ticket non admissible : sous l'espérance minimale, aucun ticket affiché,
   const r = raw(); const today = "2026-10-16";
   const matches = FQ.buildMatches(FQ.ETL.build(r), today);
   FQ.TRAINED = TRAINED;
-  const state = FQ.emptyState(); state.schemaData = 2; state.settings.ticketEvFloor = 0.5; // impossible à atteindre
+  const state = FQ.emptyState(); state.schemaData = 2; state.settings.ticketEvFloor = 0.5; state.settings.ticketEvFloorUser = true; // impossible à atteindre
   const cache = new Map();
   const ctx = { mode: "real", state, matches, matchById: new Map(matches.map((m) => [m.id, m])), today, rulesMap: FQ.RULES,
     getModel: (c, d) => { const k = c + d; if (!cache.has(k)) cache.set(k, FQ.fitModel(matches, c, d)); return cache.get(k); }, dataVersion: (c) => c, dataAgeDays: 1 };

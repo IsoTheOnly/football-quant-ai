@@ -191,7 +191,7 @@
         for (const [market, sel, p, odds, w, idx] of sels) {
           const q = idx === "o" ? { mk: r.pOK, mo: r.pOM } : idx === "u" ? { mk: U2.isNum(r.pOK) ? 1 - r.pOK : null, mo: U2.isNum(r.pOM) ? 1 - r.pOM : null } : q3(r, idx);
           const c = { matchId: r.id, date: r.date, market, sel, p, pR: FQ.P.robustP(p, q, market, k), odds, won: w, top: market === "1N2" && { 1: 0, N: 1, 2: 2 }[sel] === top };
-          if (arm ? FQ.P.armAllows(arm, c) : market === "1N2") cands.push(c);
+          if ((arm ? FQ.P.armAllows(arm, c) : market === "1N2") && (!FQ.P.legOk || FQ.P.legOk(sc, c))) cands.push(c);
         }
       }
       const tk = FQ.P.buildTicket(cands, sc, { boost, pool: 90, beam: 120 });

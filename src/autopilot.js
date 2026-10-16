@@ -516,18 +516,26 @@
   }
 
   /* ----------------------------------------------- tickets combinés : 3 scénarios de risque */
+  /*
+   * legPMin : chance minimale de CHAQUE sélection (règle d'Iso : d'abord des sélections qui ont de bonnes chances de passer,
+   * ensuite la meilleure chance du ticket). Le nul n'est retenu que s'il est estimé à 35 % ou plus.
+   */
   const SCENARIOS = [
-    { id: "sur", label: "Sûr", lo: 1.4, hi: 1.8, maxLegs: 3, maxLegOdds: 1.8, stake: 1 },
-    { id: "prudent", label: "Prudent", lo: 3, hi: 4, maxLegs: 6, maxLegOdds: 2.6, stake: 1 },
-    { id: "equilibre", label: "Équilibré", lo: 7, hi: 8, maxLegs: 9, maxLegOdds: 3.6, stake: 1 },
-    { id: "audacieux", label: "Audacieux", lo: 40, hi: 60, maxLegs: 15, maxLegOdds: 6, stake: 1 },
+    // evFloor : espérance minimale pour afficher le ticket (des sélections plus sûres veulent dire plus de sélections, donc plus de marge cumulée)
+    { id: "sur", label: "Sûr", lo: 1.4, hi: 1.8, maxLegs: 3, maxLegOdds: 1.8, stake: 1, legPMin: 0.65, evFloor: -0.15 },
+    { id: "prudent", label: "Prudent", lo: 3, hi: 4, maxLegs: 6, maxLegOdds: 2.6, stake: 1, legPMin: 0.55, evFloor: -0.2 },
+    { id: "equilibre", label: "Équilibré", lo: 7, hi: 8, maxLegs: 9, maxLegOdds: 3.6, stake: 1, legPMin: 0.5, evFloor: -0.3 },
+    { id: "audacieux", label: "Audacieux", lo: 40, hi: 60, maxLegs: 15, maxLegOdds: 6, stake: 1, legPMin: 0.45, evFloor: -0.4 },
   ];
+  const DRAW_PMIN = 0.35;
+  /** Sélection admise dans un ticket du niveau : chance minimale par sélection, nul seulement s'il est très probable */
+  const legOk = (sc, c) => (!U.isNum(sc.legPMin) || c.p >= sc.legPMin) && !(c.market === "1N2" && c.sel === "N" && c.p < DRAW_PMIN);
   function scenarios(settings) {
     const cfg = (settings && settings.ticketCfg) || [];
     return SCENARIOS.map((sc) => {
       const c = cfg.find((x) => x && x.id === sc.id) || {};
       const lo = U.isNum(c.lo) && c.lo > 1.05 ? c.lo : sc.lo, hi = U.isNum(c.hi) && c.hi > lo ? c.hi : Math.max(sc.hi, lo * 1.1);
-      return Object.assign({}, sc, { lo, hi, stake: U.isNum(c.stake) && c.stake >= 0 ? c.stake : sc.stake,
+      return Object.assign({}, sc, { lo, hi, stake: U.isNum(c.stake) && c.stake >= 0 ? c.stake : sc.stake, legPMin: U.isNum(c.legPMin) && c.legPMin >= 0 && c.legPMin < 1 ? c.legPMin : sc.legPMin,
         maxLegOdds: Math.max(sc.maxLegOdds, Math.min(15, Math.sqrt(hi) + 0.5)), maxLegs: hi > 80 ? 15 : sc.maxLegs });
     });
   }
@@ -922,6 +930,7 @@
     const n = tk.legs.length, book = tk.book ? FR_NAMES()[tk.book] || tk.book : "Bet 365 (aucune cote française)";
     const L = [];
     L.push(`${n} sélection${n > 1 ? "s" : ""} chez ${book}, cote ${f2(tk.totalOdds)} (visée ${f2(sc.lo, 1)} à ${f2(sc.hi, 1)}). Chance estimée que tout passe : ${pc1(tk.pJoint)}${U.isNum(tk.pRobust) && tk.pRobust < tk.pJoint - 0.0005 ? ` (${pc1(tk.pRobust)} en version prudente, en tenant compte des désaccords entre modèle et marché)` : ""}.`);
+    if (U.isNum(sc.legPMin) && sc.legPMin > 0) L.push(`Règle de sélection : chaque sélection a au moins ${Math.round(100 * sc.legPMin)} % de chances de passer (nul seulement s'il est estimé à ${Math.round(100 * DRAW_PMIN)} % ou plus) ; la plus faible de ce ticket est à ${pc(Math.min(...tk.legs.map((l) => l.p)))}. Réglable dans les Paramètres.` + (tk.free && tk.free.p > tk.pJoint * 1.05 ? ` Sans cette règle, le meilleur ticket aurait ${pc1(tk.free.p)} de chances avec ${tk.free.n} sélection(s) plus risquées ; la règle coûte donc un peu de chance au total, en échange de sélections individuellement plus sûres.` : ""));
     L.push("Méthode : à cote totale fixée, la chance d'un combiné vaut le produit des « rendements » de ses sélections (chance × cote ; 1 = prix juste) divisé par la cote totale, et son espérance suit le même produit. " +
       "On garde donc les sélections où le bookmaker prélève le moins" + (trainedKappa() > 0 ? " et où notre modèle et le marché sont d'accord" : "") + ", avec le nombre de sélections qui donne la meilleure chance, sans nombre fixé à l'avance ; à chance quasi égale, le ticket qui rapporte le plus l'emporte.");
     const bn = (tk.byN || []).filter((x) => U.isNum(x.pJoint || x.p));
@@ -980,7 +989,7 @@
       if (mine && (mine.frozen || mine.status !== "EN ATTENTE")) continue; // ticket de la semaine déjà engagé
       // admissibilité : seules les stratégies dont le ticket a une espérance au-dessus du seuil peuvent être jouées ;
       // si aucune ne l'atteint, pas de ticket affiché (on ne fabrique pas un ticket coûte que coûte)
-      const floor = U.isNum(s.settings.ticketEvFloor) ? s.settings.ticketEvFloor : -0.2;
+      const floor = s.settings.ticketEvFloorUser && U.isNum(s.settings.ticketEvFloor) ? s.settings.ticketEvFloor : U.isNum(sc.evFloor) ? sc.evFloor : -0.2;
       s.ticketSkip = s.ticketSkip || {};
       const okTk = Object.fromEntries(Object.entries(armTk).filter(([, t]) => U.isNum(t.ev) && t.ev >= floor));
       const fresh = Object.values(armTk).filter((t) => !t.stub);
@@ -997,6 +1006,7 @@
       let tk = arm ? armTk[arm.id] : null;
       if (!tk) { if (mine && mine.legs.some((l) => !cands.some((c) => c.matchId === l.matchId))) s.paperTickets.splice(s.paperTickets.indexOf(mine), 1); continue; }
       const legs = tk.legs.map(legOfCand);
+      tk.free = best.findFree(sc);
       const why = ticketWhy(tk, sc, arm, choice, armTk);
       const body = { scenario: sc.id, label: sc.label, week: win.week, window: [win.from, win.to], target: [sc.lo, sc.hi], arm: undefined, strategy: arm.id, strategyLabel: arm.label, why,
         book: tk.book, bookName: tk.book ? FR_NAMES()[tk.book] || tk.book : "Bet 365 (aucune cote française)",
@@ -1024,7 +1034,7 @@
     const find = (arm, sc) => {
       const found = [];
       for (const { b, c } of by) {
-        const tk = buildTicket(armCands(c, arm), sc, { boost: b === "betclic_fr" ? bf : null, objective: arm.objective, pool: 120, beam: 300 });
+        const tk = buildTicket(armCands(c, arm).filter((x) => legOk(sc, x)), sc, { boost: b === "betclic_fr" ? bf : null, objective: arm.objective, pool: 120, beam: 300 });
         if (tk) { tk.book = b; tk.medYield = c.medYield; found.push(tk); }
       }
       if (!found.length) return null;
@@ -1035,7 +1045,14 @@
       const near = found.filter((t) => t.pRobust >= 0.9 * pMax);
       return near.reduce((a, t) => (ev(t) > ev(a) ? t : a), near[0]);
     };
-    return { all, find };
+    // comparaison : meilleur ticket « chance maximale » sans la règle de chance minimale par sélection
+    const findFree = (sc) => {
+      const arm = TICKET_ARMS.find((a) => a.id === "chance");
+      let b = null;
+      for (const { b: bk, c } of by) { const t = buildTicket(armCands(c, arm), sc, { pool: 120, beam: 300 }); if (t && (!b || t.pJoint > b.pJoint)) b = t; }
+      return b ? { p: b.pJoint, n: b.legs.length, odds: b.totalOdds } : null;
+    };
+    return { all, find, findFree };
   }
   /** Aperçu des tickets sur une fenêtre (par défaut celle de la semaine ; avant jeudi : les cotes déjà publiées jusqu'à dimanche) */
   function previewTickets(ctx, winArg) {
@@ -1045,7 +1062,7 @@
     return scenarios(ctx.state.settings).map((sc) => {
       const armTk = {};
       for (const a of allowedArms(ctx.state.settings)) { const t = f.find(a, sc); if (t) armTk[a.id] = t; }
-      const floor = U.isNum(ctx.state.settings.ticketEvFloor) ? ctx.state.settings.ticketEvFloor : -0.2;
+      const floor = ctx.state.settings.ticketEvFloorUser && U.isNum(ctx.state.settings.ticketEvFloor) ? ctx.state.settings.ticketEvFloor : U.isNum(sc.evFloor) ? sc.evFloor : -0.2;
       const okTk = Object.fromEntries(Object.entries(armTk).filter(([, t]) => t.ev >= floor));
       const all = Object.values(armTk), bestBad = all.length ? all.reduce((a, t) => (t.ev > a.ev ? t : a), all[0]) : null;
       const skip = all.length && !Object.keys(okTk).length ? { reason: `meilleur ticket trouvé : cote ${f2(bestBad.totalOdds)}, chance ${pc1(bestBad.pJoint)}, espérance ${Math.round(100 * bestBad.ev)} %, sous le seuil de ${Math.round(100 * floor)} % (Paramètres)` } : null;
@@ -1381,5 +1398,5 @@
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
   FQ.P = { injuryImpact, INJ_COEF, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
-    SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
+    SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, legOk, DRAW_PMIN, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

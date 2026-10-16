@@ -654,7 +654,7 @@
     paperTickets: true,      // paper betting des 3 tickets (unités fictives, 1 u par ticket)
     ticketPolicy: "auto",    // stratégies de ticket : "auto" (l'apprentissage choisit parmi toutes) ou "favoris" (issue la plus probable de chaque match seulement)
     oddsBook: "best",        // cotes : meilleur prix parmi les bookmakers français (The Odds API), ou un bookmaker choisi ; repli Bet 365
-    ticketEvFloor: -0.2,     // espérance minimale d'un ticket affiché ; en dessous : « aucun ticket admissible » (les fantômes restent suivis)
+    ticketEvFloor: -0.2,     // seuil d'espérance choisi par Iso (ticketEvFloorUser) ; sinon seuil par niveau (SCENARIOS.evFloor)
     multiboost: false,       // Multiboost Betclic (option) : bonus de cote des combinés chiffrés chez Betclic
     ticketCfg: null,         // null = scénarios par défaut ; sinon [{ id, lo, hi, stake }]
   };

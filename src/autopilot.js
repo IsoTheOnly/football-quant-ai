@@ -997,10 +997,18 @@
         const k = r.hg > r.ag ? 0 : r.hg === r.ag ? 1 : 2;
         ll.ours += FQ.metrics.logLoss3([p.markets.p1, p.markets.pN, p.markets.p2], k); ll.market += FQ.metrics.logLoss3(p.blend.market, k); ll.n++;
       }
+      // désaccords modèle / marché de la semaine : qui avait raison ?
+      const dis = { up: { n: 0, mo: 0, mk: 0, y: 0 }, down: { n: 0, mo: 0, mk: 0, y: 0 } };
+      for (const p of s.predictions) {
+        if (p.date < wk || p.date > end || !p.blend || !p.blend.market || !p.modelMarkets) continue;
+        const r = s.results[p.matchId]; if (!r || !U.isNum(r.hg)) continue;
+        const k = r.hg > r.ag ? 0 : r.hg === r.ag ? 1 : 2, mo = [p.modelMarkets.p1, p.modelMarkets.pN, p.modelMarkets.p2];
+        for (let i = 0; i < 3; i++) { const d = mo[i] - p.blend.market[i]; const b = d >= 0.08 ? dis.up : d <= -0.08 ? dis.down : null; if (b) { b.n++; b.mo += mo[i]; b.mk += p.blend.market[i]; b.y += k === i ? 1 : 0; } }
+      }
       const clv = pk.map((p) => p.clv && p.clv.ev).filter(U.isNum);
       s.learnLog.push({ week: wk, at: new Date().toISOString(), scen,
         picks: { n: pk.length, won: pk.filter((p) => p.status === "GAGNÉ").length, expected: Math.round(pk.reduce((a, p) => a + (p.p || 0), 0) * 10) / 10 },
-        ll: ll.n ? { n: ll.n, ours: ll.ours / ll.n, market: ll.market / ll.n } : null, clv: clv.length ? { n: clv.length, ev: clv.reduce((a, x) => a + x, 0) / clv.length } : null });
+        ll: ll.n ? { n: ll.n, ours: ll.ours / ll.n, market: ll.market / ll.n } : null, dis, clv: clv.length ? { n: clv.length, ev: clv.reduce((a, x) => a + x, 0) / clv.length } : null });
       added++;
     }
     // paris saisis par Iso (réels et tests séparés), recalculés sur les 10 dernières semaines (règlements tardifs)

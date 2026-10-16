@@ -1776,6 +1776,17 @@ window.__fqStartApp = function () {
       </tbody></table><//>
       ${(() => { const S0 = T.summary0 || {}, a = S0.diffModelVsMarket, b = S0.diffFinalVsMarket; const ci = (x) => (x && x.ci ? `IC 95 % ${sgn(x.ci[0], 4)} à ${sgn(x.ci[1], 4)}` : "");
         return a ? html`<p className="tiny muted mt-1">Écart avec le marché sur ${S0.testN || "—"} matchs du test final : modèle seul ${sgn(a.mean, 4)} (${ci(a)}) ${a.ci && a.ci[0] > 0 ? "→ le modèle seul est moins précis que le marché, c'est démontré" : "→ différence non démontrée"} ; probabilités retenues ${sgn(b.mean, 4)} (${ci(b)}) ${b.ci && b.ci[0] <= 0 && b.ci[1] >= 0 ? "→ pas de différence démontrée : nous faisons aussi bien que le marché, pas mieux" : ""}. Le modèle n'est mêlé que là où la validation l'a justifié. Entraînement du ${dFR((T.generatedAt || "").slice(0, 10))}.</p>` : html`<p className="tiny muted mt-1">Entraînement du ${dFR((T.generatedAt || "").slice(0, 10))}.</p>`; })()}` : html`<p className="small muted">Disponible après le prochain réentraînement.</p>`}
+      ${(() => { const D = (T.summary0 || {}).disagree; if (!D) return null;
+        const live = { up: { n: 0, mo: 0, mk: 0, y: 0 }, down: { n: 0, mo: 0, mk: 0, y: 0 } };
+        for (const e of state.learnLog || []) for (const k of ["up", "down"]) { const x = e.dis && e.dis[k]; if (x && x.n) { live[k].n += x.n; live[k].mo += x.mo; live[k].mk += x.mk; live[k].y += x.y; } }
+        const avg = (x) => (x.n ? { n: x.n, mo: x.mo / x.n, mk: x.mk / x.n, y: x.y / x.n } : null);
+        const row = (lab, x) => x && x.n ? html`<tr key=${lab}><td>${lab}</td><td className="mono">${x.n}</td><td className="mono">${pct(x.mo, 1)}</td><td className="mono">${pct(x.mk, 1)}</td><td className="mono"><b>${pct(x.y, 1)}</b></td></tr>` : null;
+        return html`<div className="eyebrow mt-3">Quand notre modèle et le marché ne sont pas d'accord (1N2, écart ≥ 8 points) : qui avait raison ?</div>
+        <${TableWrap}><table className="tbl tiny"><thead><tr><th>Cas</th><th>Issues</th><th>Modèle disait</th><th>Marché disait</th><th>Arrivé en réalité</th></tr></thead><tbody>
+          ${row("Modèle plus optimiste · passé", D.past.up)}${row("Modèle plus optimiste · test final", D.test.up)}${row("Modèle plus optimiste · depuis la mise en service", avg(live.up))}
+          ${row("Modèle moins optimiste · passé", D.past.down)}${row("Modèle moins optimiste · test final", D.test.down)}${row("Modèle moins optimiste · depuis la mise en service", avg(live.down))}
+        </tbody></table><//>
+        <p className="tiny muted mt-1">Si la colonne « réel » colle au marché, c'est le modèle qui se trompait quand ils divergeaient : la prudence des tickets est justifiée. Si un jour elle colle au modèle, la prudence sera réapprise à la baisse au réentraînement hebdomadaire.</p>`; })()}
       <div className="eyebrow mt-3">Stratégies de ticket · taux de réussite</div>
       ${T.tickets && U.isNum(T.tickets.kappa) && html`<p className="tiny muted">Prudence apprise : κ = ${fr(T.tickets.kappa, 1)} (une sélection où modèle et marché divergent de 10 points perd ${fr(10 * T.tickets.kappa, 0)} points de chance pour la construction du ticket). Choisie sur l'apprentissage et la validation, d'après le rendement réalisé des sélections ; le test final n'a pas servi.</p>`}
       ${scs.map((sc) => { const stats = FQ.P.armStats(ctx, sc.id); const ch = (state.armChoice || {})[week + "|" + sc.id]; const F = FQ.P.armFactors(ctx, sc.id);

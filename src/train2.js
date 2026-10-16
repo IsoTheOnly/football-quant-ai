@@ -246,6 +246,24 @@
     return [r[Math.floor(0.025 * r.length)], r[Math.floor(0.975 * r.length)]];
   }
   T.bootRoi = bootRoi;
+  /**
+   * Désaccords modèle / marché (1N2) : pour chaque issue, écart entre modèle seul (calibré) et marché sans marge.
+   * up = modèle plus optimiste d'au moins 8 points, down = moins optimiste, agree = le reste ; moyennes et fréquence réelle.
+   * Dit a posteriori qui avait raison quand les deux sources divergent.
+   */
+  function disagreeBins(rows) {
+    const out = { up: { n: 0, mo: 0, mk: 0, y: 0 }, down: { n: 0, mo: 0, mk: 0, y: 0 }, agree: { n: 0, mo: 0, mk: 0, y: 0 } };
+    for (const r of rows) {
+      if (!r.pM3 || !r.pK3) continue;
+      for (let i = 0; i < 3; i++) {
+        const d = r.pM3[i] - r.pK3[i], b = d >= 0.08 ? out.up : d <= -0.08 ? out.down : out.agree;
+        b.n++; b.mo += r.pM3[i]; b.mk += r.pK3[i]; b.y += r.k === i ? 1 : 0;
+      }
+    }
+    for (const b of Object.values(out)) if (b.n) { b.mo /= b.n; b.mk /= b.n; b.y /= b.n; }
+    return out;
+  }
+  T.disagreeBins = disagreeBins;
 
   /**
    * Entraînement complet. onLog(texte) reçoit la progression.
@@ -386,6 +404,7 @@
       const dm = testB.filter(oddsOf).map((r) => FQ.metrics.logLoss3(r.pM3, r.k) - FQ.metrics.logLoss3(r.pK3, r.k));
       out.summary0.diffFinalVsMarket = { mean: mean(d, (x) => x), ci: bootRoi(d, 1000) };
       out.summary0.diffModelVsMarket = { mean: mean(dm, (x) => x), ci: bootRoi(dm, 1000) };
+      out.summary0.disagree = { past: disagreeBins(trainB), test: disagreeBins(testB) };
     }
     // politique : seuil d'EV et cote maximale choisis sur l'apprentissage
     const cands = [];

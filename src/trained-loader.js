@@ -1,0 +1,1 @@
+try { window.FQ.TRAINED = JSON.parse(document.getElementById("fq-trained").textContent); } catch (e) { window.FQ.TRAINED = null; }

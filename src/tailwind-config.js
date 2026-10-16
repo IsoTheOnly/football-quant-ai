@@ -1,0 +1,1 @@
+try { tailwind.config = { corePlugins: { preflight: false }, theme: { extend: { colors: { bg: "var(--bg)", surface: "var(--surface)", accent: "var(--accent)", pos: "var(--pos)", neg: "var(--neg)" } } } }; } catch (e) {}

@@ -1,0 +1,32 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Football Quant AI</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>{{include:src/styles.css}}</style>
+<div id="fatal" hidden></div>
+<div id="root"><div class="boot"><div class="brand-mark">FQ</div><div>Chargement des données (ESPN, football-data.co.uk)…</div></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide-react@0.395.0/dist/umd/lucide-react.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js"></script>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>{{include:src/tailwind-config.js}}</script>
+<script type="text/plain" id="fq-raw">{{b64:data/snapshot.json.gz}}</script>
+<script type="application/json" id="fq-trained">{{include:data/trained.json}}</script>
+<script id="fq-engine">{{include:src/engine.js}}</script>
+<script>{{include:src/trained-loader.js}}</script>
+<script id="fq-etl2">{{include:src/etl2.js}}</script>
+<script id="fq-train2">{{include:src/train2.js}}</script>
+<script>{{include:src/demo.js}}</script>
+<script id="fq-standings">{{include:src/standings.js}}</script>
+<script id="fq-core">{{include:src/core.js}}</script>
+<script id="fq-autopilot">{{include:src/autopilot.js}}</script>
+<script type="text/plain" id="fq-runner">{{include:src/runner.js}}</script>
+<script type="text/plain" id="fq-etl">{{include:etl/build_data.py}}</script>
+<script>{{include:src/app.js}}</script>
+<script>{{include:src/boot.js}}</script>
+
+</body></html>

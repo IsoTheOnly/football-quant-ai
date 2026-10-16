@@ -61,8 +61,8 @@ Si ESPN est injoignable, `run` sort avec le code 3 et écrit `fetch_plan.json` ;
 
 1N2 : cote relevée chez un bookmaker, jamais calculée :
 
-1. bookmaker français de référence (Paramètres, Betclic par défaut) ;
-2. sinon médiane des bookmakers français relevés pour le match ;
+1. meilleur prix parmi les 5 bookmakers français (par défaut), ou un bookmaker choisi dans les Paramètres ;
+2. un ticket est chiffré chez le bookmaker français qui le paie le mieux (il se joue chez un seul) ;
 3. sinon Bet 365 (crédits The Odds API épuisés pour le mois, ou compétition non couverte).
 
 Autres marchés des combinés :
@@ -71,16 +71,17 @@ Autres marchés des combinés :
 |---|---|
 | Les deux équipes marquent, ±2,5 buts | relevée match par match (The Odds API, NetBet / PMU), 2 crédits par match |
 | Double chance | **estimée** d'après le 1N2 réel du même bookmaker (1 / (1/c₁ + 1/c₂)), corrigée par les cotes réelles saisies dans « Mon ticket » ; marquée d'un astérisque |
-| Buteur, joueur décisif | aucune cote française accessible : pronostic seul |
+| Buteur, joueur décisif | aucune cote française accessible : cote juste et cote minimale affichées, cote saisissable à la main |
+| Toute sélection | cote saisie par Iso (vue ou boostée) : prioritaire, marquée « saisie par toi » |
 
-Multiboost Betclic : bonus de cote totale selon le nombre de sélections, barème de départ relevé sur des tickets réels (8 → +4,7 %, 10 → +6,2 %, 13 → +7,7 %), remplacé par les bonus observés sur les tickets Betclic saisis.
+Multiboost Betclic (option, désactivée par défaut) : bonus de cote totale selon le nombre de sélections, barème de départ relevé sur des tickets réels (8 → +4,7 %, 10 → +6,2 %, 13 → +7,7 %), remplacé par les bonus observés sur les tickets Betclic saisis.
 
 Les crédits (500 par mois, offre gratuite) sont répartis sur le mois, davantage du jeudi au samedi pour les tickets. Le « seuil 1/p » est la cote minimale à exiger selon le modèle, pas une cote de bookmaker.
 
 ## Probabilités et apprentissage
 
 - Marge retirée par la méthode de la puissance (corrige le biais favori-outsider), choisie sur la log loss ; poids modèle / marché par compétition, gardé seulement s'il améliore la période de test.
-- Tickets : sept stratégies (favoris à 45 / 55 / 65 %, 1N2 chance max avec ou sans nul, combiné sécurisé multi-marchés ≥ 70 %, multi-marchés ≥ 50 %), rejouées sur l'historique puis suivies chaque semaine en « fantôme ». La stratégie jouée est celle dont le taux de réussite attendu (loi Bêta : semaines rejouées à demi-poids, semaines réelles en entier) est le plus élevé.
+- Tickets : quatre niveaux (Sûr 1,4–1,8, Prudent 3–4, Équilibré 7–8, Audacieux 40–60), huit stratégies dont « Valeur » (espérance positive seulement) (favoris à 45 / 55 / 65 %, 1N2 chance max avec ou sans nul, combiné sécurisé multi-marchés ≥ 70 %, multi-marchés ≥ 50 %), rejouées sur l'historique puis suivies chaque semaine en « fantôme ». La stratégie jouée est celle dont le taux de réussite attendu (loi Bêta : semaines rejouées à demi-poids, semaines réelles en entier) est le plus élevé.
 - Audit de chaque semaine terminée : tickets, choix du modèle (réel vs attendu), log loss face au marché, CLV.
 - Réentraînement complet chaque semaine par la tâche planifiée.
 

@@ -7,14 +7,24 @@ const P = FQ.P;
 const now = new Date().toISOString();
 const fr = (books, at) => ({ books, at: at || now, first: books, ko: "2026-10-18T15:00:00Z", eventId: "e" });
 
-test("cote de référence : bookmaker choisi, puis médiane FR, puis Bet 365 ; jamais calculée", () => {
+test("cote de référence : bookmaker choisi, sinon meilleur prix FR, puis Bet 365 ; jamais calculée ; saisie prioritaire", () => {
   const books = { winamax_fr: [2.05, 3.3, 3.45, null], betclic_fr: [2.0, 3.25, 3.5, null], unibet_fr: [1.98, 3.4, 3.6, null] };
   const bet365 = { h: 2.1, d: 3.4, a: 3.6, src: "Bet 365 via ESPN", at: now };
   const set = { oddsBook: "winamax_fr" };
   let o = P.refOdds(match({ oddsFr: fr(books), odds: bet365 }), set);
   assert.equal(o.h, 2.05); assert.match(o.src, /^Winamax/);
+  // bookmaker choisi absent du match, ou réglage par défaut : meilleur prix par issue parmi les bookmakers français
   o = P.refOdds(match({ oddsFr: fr(books), odds: bet365 }), { oddsBook: "pmu_fr" });
-  assert.equal(o.h, 2.0); assert.equal(o.a, 3.5); assert.match(o.src, /^médiane/);
+  assert.equal(o.h, 2.05); assert.equal(o.a, 3.6); assert.match(o.srcs[2], /Unibet/);
+  o = P.refOdds(match({ oddsFr: fr(books), odds: bet365 }), {});
+  assert.deepEqual([o.h, o.d, o.a], [2.05, 3.4, 3.6]);
+  // un bookmaker précis (ticket) : ses cotes à lui, ou rien
+  assert.equal(P.refOdds(match({ oddsFr: fr(books) }), {}, "betclic_fr").h, 2.0);
+  assert.equal(P.refOdds(match({ oddsFr: fr(books) }), {}, "pmu_fr"), null);
+  // cote saisie par Iso : prioritaire et signalée
+  const mm = match({ oddsFr: fr(books) });
+  const om = P.matchOddsMap(mm, {}, null, null, { [mm.id + "|1N2|1"]: { v: 2.4, at: "2026-10-16" } });
+  assert.equal(om["1N2|1"].v, 2.4); assert.ok(om["1N2|1"].user);
   o = P.refOdds(match({ odds: bet365 }), set);
   assert.equal(o.h, 2.1); assert.match(o.src, /aucune cote française/);
   assert.equal(P.refOdds(match({}), set), null, "sans cote relevée : aucune cote");

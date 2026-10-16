@@ -117,33 +117,47 @@
    */
   const FR_NAMES = () => (FQ.ETL && FQ.ETL.FR_BOOKS) || { winamax_fr: "Winamax", betclic_fr: "Betclic", unibet_fr: "Unibet", pmu_fr: "PMU", netbet_fr: "NetBet" };
   const median = (xs) => { const v = xs.slice().sort((a, b) => a - b); const n = v.length; return n % 2 ? v[(n - 1) / 2] : (v[n / 2 - 1] + v[n / 2]) / 2; };
-  function refOdds(match, set) {
+  function refOdds(match, set, book) {
     const fr = match && match.oddsFr, o = match && match.odds;
     const at = (x) => (x && x.at ? Date.parse(x.at) : 0);
+    const names = FR_NAMES();
     const frUsable = fr && fr.books && Object.keys(fr.books).length && !(o && o.h && at(o) > at(fr) && Date.now() - at(fr) > 72 * 3600e3);
+    const stamp = fr ? ` · relevée le ${String(fr.at).slice(0, 16).replace("T", " ")} UTC` : "";
+    if (book) { // un bookmaker précis (construction d'un ticket chez ce bookmaker)
+      const b = frUsable && fr.books[book];
+      return b ? { h: b[0], d: b[1], a: b[2], src: `${names[book] || book} (The Odds API)${stamp}`, at: fr.at, book, fr: true } : null;
+    }
+    const pref = (set && set.oddsBook) || "best";
     if (frUsable) {
-      const names = FR_NAMES(), pref = (set && set.oddsBook) || "winamax_fr", stamp = ` · relevée le ${String(fr.at).slice(0, 16).replace("T", " ")} UTC`;
-      const b = fr.books[pref];
+      const b = pref !== "best" && fr.books[pref];
       if (b) return { h: b[0], d: b[1], a: b[2], src: `${names[pref] || pref} (The Odds API)${stamp}`, at: fr.at, book: pref, fr: true };
+      // meilleur prix par issue parmi les bookmakers français relevés
       const keys = Object.keys(fr.books);
-      const pick = (i) => Math.round(median(keys.map((k) => fr.books[k][i])) * 100) / 100;
-      return { h: pick(0), d: pick(1), a: pick(2), src: `médiane de ${keys.map((k) => names[k] || k).join(", ")} (The Odds API ; ${names[pref] || pref} absent)${stamp}`, at: fr.at, book: "median_fr", fr: true };
+      const best = [0, 1, 2].map((i) => { let k = keys[0]; for (const x of keys) if (fr.books[x][i] > fr.books[k][i]) k = x; return { v: fr.books[k][i], k }; });
+      const srcs = best.map((x) => `meilleure cote FR : ${names[x.k] || x.k} (The Odds API)${stamp}`);
+      return { h: best[0].v, d: best[1].v, a: best[2].v, srcs, books: best.map((x) => x.k), src: srcs[0], at: fr.at, book: "best", fr: true };
     }
     if (o && o.h) return Object.assign({}, o, { src: o.src + (o.at ? ` · relevée le ${String(o.at).slice(0, 16).replace("T", " ")} UTC` : "") + " · aucune cote française disponible", fr: false });
     return null;
   }
   /**
    * Cotes complémentaires relevées (The Odds API, bookmakers français) : les deux équipes marquent, plus/moins de 2,5 buts.
-   * Bookmaker de référence s'il les propose, sinon le premier qui les propose (souvent NetBet ou PMU).
+   * Bookmaker demandé, sinon meilleur prix parmi les bookmakers qui les proposent (souvent NetBet ou PMU).
    */
-  function extraOdds(match, set) {
+  function extraOdds(match, set, book) {
     const x = match && match.oddsFrX; if (!x) return null;
-    const names = FR_NAMES(), pref = (set && set.oddsBook) || "betclic_fr", stamp = ` · relevée le ${String(x.at).slice(0, 16).replace("T", " ")} UTC`;
-    const pick = (obj) => { const k = obj && (obj[pref] ? pref : Object.keys(obj)[0]); return k ? { k, v: obj[k] } : null; };
-    const out = {};
-    const b = pick(x.btts); if (b) out.btts = { y: b.v[0], n: b.v[1], src: `${names[b.k] || b.k} (The Odds API)${stamp}` };
+    const names = FR_NAMES(), stamp = ` · relevée le ${String(x.at).slice(0, 16).replace("T", " ")} UTC`;
     const tb = {}; for (const [k, lines] of Object.entries(x.totals || {})) if (lines["2.5"]) tb[k] = lines["2.5"];
-    const t = pick(tb); if (t) out.ou = { o: t.v[0], u: t.v[1], src: `${names[t.k] || t.k} (The Odds API)${stamp}` };
+    const pick = (obj, i) => {
+      if (book) return obj[book] ? { k: book, v: obj[book][i] } : null;
+      let best = null; for (const [k, v] of Object.entries(obj || {})) if (!best || v[i] > best.v) best = { k, v: v[i] };
+      return best;
+    };
+    const out = {};
+    const y = pick(x.btts, 0), n = pick(x.btts, 1);
+    if (y && n) out.btts = { y: y.v, n: n.v, srcY: `${names[y.k] || y.k} (The Odds API)${stamp}`, srcN: `${names[n.k] || n.k} (The Odds API)${stamp}` };
+    const ov = pick(tb, 0), un = pick(tb, 1);
+    if (ov && un) out.ou = { o: ov.v, u: un.v, srcO: `${names[ov.k] || ov.k} (The Odds API)${stamp}`, srcU: `${names[un.k] || un.k} (The Odds API)${stamp}` };
     return Object.keys(out).length ? out : null;
   }
   /**
@@ -156,18 +170,32 @@
     const d = (a, b) => Math.floor((1 / (1 / a + 1 / b)) * f * 100) / 100;
     return { "1N": d(o.h, o.d), "12": d(o.h, o.a), N2: d(o.d, o.a) };
   }
-  /** Cotes du match au format attendu par les opportunités et les tickets (ol : corrections apprises, ex. ol.dcFactor) */
-  function matchOddsMap(match, set, ol) {
-    const o = refOdds(match, set);
+  /**
+   * Cotes du match au format attendu par les opportunités et les tickets.
+   * ol : corrections apprises (ol.dcFactor) ; book : un bookmaker précis (sinon meilleur prix FR) ;
+   * user : cotes saisies par Iso (clé « matchId|marché|sélection »), prioritaires et marquées comme telles.
+   */
+  function matchOddsMap(match, set, ol, book, user) {
+    const o = refOdds(match, set, book);
     const m = {};
     if (o) {
-      m["1N2|1"] = { v: o.h, src: o.src }; m["1N2|N"] = { v: o.d, src: o.src }; m["1N2|2"] = { v: o.a, src: o.src };
-      const dc = dcOdds(o, ol && ol.dcFactor), short = String(o.src).split(" (")[0].split(" ·")[0];
-      for (const k of ["1N", "12", "N2"]) if (dc[k] > 1.01) m["DC|" + k] = { v: dc[k], src: `estimée d'après le 1N2 ${short}${ol && ol.dcN ? ` (corrigée sur ${ol.dcN} cote(s) réelle(s))` : ""}`, est: true };
+      const sr = (i) => (o.srcs ? o.srcs[i] : o.src);
+      m["1N2|1"] = { v: o.h, src: sr(0) }; m["1N2|N"] = { v: o.d, src: sr(1) }; m["1N2|2"] = { v: o.a, src: sr(2) };
+      // double chance : déduite du 1N2 d'un même bookmaker (sinon on mélangerait des prix qu'aucun bookmaker ne propose ensemble)
+      const one = o.book && o.book !== "best" ? o : (match.oddsFr && match.oddsFr.books ? (() => { const fr = match.oddsFr.books; let k = null, mg = Infinity; for (const [x, t] of Object.entries(fr)) { const g = 1 / t[0] + 1 / t[1] + 1 / t[2]; if (g < mg) { mg = g; k = x; } } return k ? { h: fr[k][0], d: fr[k][1], a: fr[k][2], src: (FR_NAMES()[k] || k) } : null; })() : o);
+      if (one) {
+        const dc = dcOdds(one, ol && ol.dcFactor), short = String(one.src).split(" (")[0].split(" ·")[0];
+        for (const k of ["1N", "12", "N2"]) if (dc[k] > 1.01) m["DC|" + k] = { v: dc[k], src: `estimée d'après le 1N2 ${short}${ol && ol.dcN ? ` (corrigée sur ${ol.dcN} cote(s) réelle(s))` : ""}`, est: true };
+      }
     }
-    const x = extraOdds(match, set);
-    if (x && x.btts) { m["BTTS|Oui"] = { v: x.btts.y, src: x.btts.src }; m["BTTS|Non"] = { v: x.btts.n, src: x.btts.src }; }
-    if (x && x.ou) { m["Buts|+2.5"] = { v: x.ou.o, src: x.ou.src }; m["Buts|-2.5"] = { v: x.ou.u, src: x.ou.src }; }
+    const x = extraOdds(match, set, book);
+    if (x && x.btts) { m["BTTS|Oui"] = { v: x.btts.y, src: x.btts.srcY }; m["BTTS|Non"] = { v: x.btts.n, src: x.btts.srcN }; }
+    if (x && x.ou) { m["Buts|+2.5"] = { v: x.ou.o, src: x.ou.srcO }; m["Buts|-2.5"] = { v: x.ou.u, src: x.ou.srcU }; }
+    if (user) for (const [k, u] of Object.entries(user)) {
+      if (!k.startsWith(match.id + "|") || !(u && u.v > 1)) continue;
+      const key = k.slice(match.id.length + 1);
+      m[key] = { v: u.v, src: `saisie par toi${u.book ? " (" + u.book + ")" : ""} le ${String(u.at || "").slice(0, 10)}`, user: true };
+    }
     return Object.keys(m).length ? m : null;
   }
   /** Rapport médian « cote double chance réelle / cote déduite » sur les tickets saisis (au moins 3 sélections double chance) */
@@ -324,7 +352,7 @@
         continue;
       }
       const players = defaultPlayersFor(ctx, m).map((p) => computePlayer(ctx, m, b, p)).filter((p) => !p.incomplete);
-      const snap = makeSnapshot(ctx, m, b, { origin: o.origin || "manuel" }, players, ctx.mode === "demo" ? demoOddsMap(ctx, m, players) : matchOddsMap(m, ctx.state.settings, ctx.state.oddsLearn));
+      const snap = makeSnapshot(ctx, m, b, { origin: o.origin || "manuel" }, players, ctx.mode === "demo" ? demoOddsMap(ctx, m, players) : matchOddsMap(m, ctx.state.settings, ctx.state.oddsLearn, null, ctx.state.userOdds));
       s.opportunities.forEach((x) => { if (x.matchId === m.id && x.status === "ouverte") x.status = "remplacée"; });
       snap.opps.forEach((x) => { x.dataVersion = dv; x.origin = o.origin || "manuel"; });
       s.predictions.push(snap.pred); s.opportunities.push(...snap.opps);
@@ -418,6 +446,7 @@
 
   /* ----------------------------------------------- tickets combinés : 3 scénarios de risque */
   const SCENARIOS = [
+    { id: "sur", label: "Sûr", lo: 1.4, hi: 1.8, maxLegs: 3, maxLegOdds: 1.8, stake: 1 },
     { id: "prudent", label: "Prudent", lo: 3, hi: 4, maxLegs: 6, maxLegOdds: 2.6, stake: 1 },
     { id: "equilibre", label: "Équilibré", lo: 7, hi: 8, maxLegs: 9, maxLegOdds: 3.6, stake: 1 },
     { id: "audacieux", label: "Audacieux", lo: 40, hi: 60, maxLegs: 15, maxLegOdds: 6, stake: 1 },
@@ -486,7 +515,8 @@
           if (b > HI + 1e-9) continue;
           const ns = { idx: st.idx.concat([i]), last: i, lo, lp: st.lp + x.lp };
           // dans la fourchette : candidat (ajouter une sélection ne ferait que baisser la chance de gain)
-          if (b >= LO - 1e-9) { if (!best || ns.lp > best.lp + 1e-12 || (Math.abs(ns.lp - best.lp) < 1e-12 && ns.idx.length < best.idx.length)) best = ns; }
+          const key = (z) => (o.objective === "ev" ? z.lp + z.lo : z.lp); // chance de gain (défaut) ou espérance (p × cote)
+          if (b >= LO - 1e-9) { if (!best || key(ns) > key(best) + 1e-12 || (Math.abs(key(ns) - key(best)) < 1e-12 && ns.idx.length < best.idx.length)) best = ns; }
           else next.push(ns);
         }
       }
@@ -529,7 +559,7 @@
   /** Fonction de bonus à utiliser pour les tickets : seulement si le Multiboost est activé et le bookmaker de référence est Betclic */
   function boostFn(state) {
     const set = (state && state.settings) || {};
-    if (set.multiboost === false || (set.oddsBook || "betclic_fr") !== "betclic_fr") return null;
+    if (set.multiboost !== true) return null; // désactivé par défaut ; appliqué seulement aux tickets chiffrés chez Betclic
     const t = boostTable(state);
     return (n) => boostFor(t, n);
   }
@@ -552,10 +582,13 @@
     { id: "chance_v", label: "1N2 chance max, sans nul", pMin: 0.2, markets: ["1N2"], noDraw: true, family: "chance" },
     { id: "chance", label: "1N2 chance max", pMin: 0, markets: ["1N2"], family: "chance" },
     { id: "securise", label: "Combiné sécurisé multi-marchés (≥ 70 %)", pMin: 0.7, markets: ["1N2", "DC", "BTTS", "Buts"], family: "multi" },
-    { id: "multi", label: "Multi-marchés chance max (≥ 50 %)", pMin: 0.5, markets: ["1N2", "DC", "BTTS", "Buts"], family: "multi" },
+    { id: "multi", label: "Multi-marchés chance max (≥ 50 %)", pMin: 0.5, markets: ["1N2", "DC", "BTTS", "Buts", "Buteur", "Joueur Décisif"], family: "multi" },
+    // valeur : seules les sélections à espérance positive (cote réelle ou saisie > cote juste), ticket à espérance maximale ; souvent vide
+    { id: "valeur", label: "Valeur : espérance positive seulement", pMin: 0.3, evMin: 0.0, markets: ["1N2", "DC", "BTTS", "Buts", "Buteur", "Joueur Décisif"], family: "valeur", objective: "ev" },
   ];
   /** Sélections admises par une stratégie : marché, issue favorite (ou non), nul exclu (ou non), probabilité minimale */
-  const armAllows = (arm, c) => (arm.markets || ["1N2"]).includes(c.market) && (!arm.top || c.top) && !(arm.noDraw && c.market === "1N2" && c.sel === "N") && c.p >= arm.pMin;
+  const armAllows = (arm, c) => (arm.markets || ["1N2"]).includes(c.market) && (!arm.top || c.top) && !(arm.noDraw && c.market === "1N2" && c.sel === "N") && c.p >= arm.pMin
+    && (arm.evMin === undefined || (U.isNum(c.ev) ? c.ev : c.p * c.odds - 1) > arm.evMin);
   const pc = (x) => (U.isNum(x) ? Math.round(100 * x) + " %" : "—");
   /** Libellés et probabilités des sélections d'un match pour chaque marché */
   function selectionsOf(pr, m) {
@@ -584,7 +617,7 @@
     parts.push(`cote ${String(odds).replace(".", ",")} (${String(src || "").split(" · relevée")[0]})`);
     return parts.join(" · ");
   }
-  function ticketCandidates(ctx, win) {
+  function ticketCandidates(ctx, win, book) {
     const s = ctx.state, set = s.settings, nowMs = Date.now();
     const w = win || ticketWindow(ctx.today, set);
     const start = w.start, end = w.to;
@@ -594,14 +627,19 @@
       if (m.status !== "PROGRAMMÉ" || m.date < start || m.date > end || kickoffPassed(m, nowMs)) continue;
       const pr = lastPred.get(m.id); if (!pr || !pr.markets) continue;
       if ((pr.reliability || 0) < (set.relMin || 55)) continue;
-      const om = ctx.mode === "demo" ? demoOddsMap(ctx, m, []) : matchOddsMap(m, set, s.oddsLearn);
+      const om = ctx.mode === "demo" ? demoOddsMap(ctx, m, []) : matchOddsMap(m, set, s.oddsLearn, book || null, s.userOdds);
       if (!om || !om["1N2|1"]) continue;
       const p3 = [pr.markets.p1, pr.markets.pN, pr.markets.p2], top = p3.indexOf(Math.max(...p3));
       const ko = FQ.time.kickoffUtc(m.date, m.time, m.tz);
-      for (const [market, sel, label, p] of selectionsOf(pr, m)) {
+      const sels = selectionsOf(pr, m);
+      for (const pl of pr.players || []) { // buteur / joueur décisif : seulement avec une cote saisie
+        if (U.isNum(pl.pScore) && om["Buteur|" + pl.name]) sels.push(["Buteur", pl.name, `Buteur : ${pl.name}`, pl.pScore]);
+        if (U.isNum(pl.pDecisive) && om["Joueur Décisif|" + pl.name]) sels.push(["Joueur Décisif", pl.name, `Décisif : ${pl.name}`, pl.pDecisive]);
+      }
+      for (const [market, sel, label, p] of sels) {
         const od = om[market + "|" + sel]; if (!od || !U.isNum(od.v) || od.v <= 1 || !U.isNum(p)) continue;
         out.push({ matchId: m.id, comp: m.comp, date: m.date, time: m.time || "", kickoff: ko ? new Date(ko).toISOString() : null, home: m.home, away: m.away,
-          market, sel, label, p, odds: od.v, oddsSrc: od.src, estOdds: !!od.est, rel: pr.reliability,
+          market, sel, label, p, odds: od.v, oddsSrc: od.src, estOdds: !!od.est, userOdds: !!od.user, ev: p * od.v - 1, rel: pr.reliability, playerName: market === "Buteur" || market === "Joueur Décisif" ? sel : null,
           top: market === "1N2" && { 1: 0, N: 1, 2: 2 }[sel] === top, why: legWhy(pr, m, market, sel, p, od.v, od.src), predictionId: pr.id });
       }
     }
@@ -692,16 +730,17 @@
     const win = ticketWindow(ctx.today, s.settings);
     if (!win.open) return;
     learnDcFactor(s);
-    const cands = ticketCandidates(ctx, win), bf = boostFn(s);
+    const bf = boostFn(s);
+    const best = bestTicketFinder(ctx, win, bf), cands = best.all;
     s.armChoice = s.armChoice || {};
     for (const sc of scenarios(s.settings)) {
       // tickets fantômes : un par stratégie
       for (const arm of TICKET_ARMS) {
         const sh = s.shadowTickets.find((t) => t.scenario === sc.id && t.week === win.week && t.arm === arm.id);
         if (sh && (sh.frozen || sh.status !== "EN ATTENTE")) continue;
-        const tk = buildTicket(armCands(cands, arm), sc, { boost: bf });
+        const tk = best.find(arm, sc);
         if (!tk) { if (sh) s.shadowTickets.splice(s.shadowTickets.indexOf(sh), 1); continue; }
-        const body = { scenario: sc.id, arm: arm.id, week: win.week, legs: tk.legs.map(legOfCand), totalOdds: Math.round(tk.totalOdds * 100) / 100, boost: tk.boost, pJoint: tk.pJoint, stake: 1 };
+        const body = { scenario: sc.id, arm: arm.id, week: win.week, book: tk.book, legs: tk.legs.map(legOfCand), totalOdds: Math.round(tk.totalOdds * 100) / 100, boost: tk.boost, pJoint: tk.pJoint, ev: tk.ev, stake: 1 };
         if (sh) Object.assign(sh, body); else s.shadowTickets.push(Object.assign({ id: U.uid("sh"), createdAt: now, status: "EN ATTENTE", frozen: false, profit: 0 }, body));
       }
       // ticket joué : stratégie choisie une fois par semaine (au premier passage du jeudi)
@@ -710,33 +749,57 @@
       const choice = s.armChoice[key], arm = TICKET_ARMS.find((a) => a.id === choice.arm) || TICKET_ARMS[0];
       const mine = s.paperTickets.find((t) => t.scenario === sc.id && t.week === win.week);
       if (mine && (mine.frozen || mine.status !== "EN ATTENTE")) continue; // ticket de la semaine déjà engagé
-      const tk = buildTicket(armCands(cands, arm), sc, { boost: bf });
+      const tk = best.find(arm, sc);
       if (!tk) { if (mine && mine.legs.some((l) => !cands.some((c) => c.matchId === l.matchId))) s.paperTickets.splice(s.paperTickets.indexOf(mine), 1); continue; }
       const legs = tk.legs.map(legOfCand);
       const est = legs.filter((l) => l.estOdds).length;
       const why = `${legs.length} sélection${legs.length > 1 ? "s" : ""}, ${arm.top ? `chacune l'issue la plus probable de son match (≥ ${Math.round(100 * arm.pMin)} %)` : arm.family === "multi" ? `tous marchés confondus, chacune estimée à ${Math.round(100 * arm.pMin)} % ou plus, choisies pour la plus forte chance de gain à cette cote` : arm.noDraw ? "victoires uniquement, choisies pour la plus forte chance de gain à cette cote" : "choisies pour la plus forte chance de gain à cette cote"} ; chance estimée que tout passe : ${pc(tk.pJoint)}.` +
         (tk.boost ? ` Multiboost Betclic estimé +${(100 * tk.boost).toFixed(1).replace(".", ",")} % (cote ${String(Math.round(tk.rawOdds * 100) / 100).replace(".", ",")} avant boost).` : "") +
-        (est ? ` ${est} cote(s) double chance estimée(s) d'après le 1N2 : vérifie le prix chez Betclic.` : "") + ` ${choice.reason}`;
+        (est ? ` ${est} cote(s) double chance estimée(s) d'après le 1N2 : vérifie le prix.` : "") +
+        ` Chiffré chez ${tk.book ? FR_NAMES()[tk.book] || tk.book : "Bet 365"}, le bookmaker français qui paie le mieux ce ticket. Espérance ${tk.ev >= 0 ? "+" : ""}${(100 * tk.ev).toFixed(0)} % : rentable seulement à une cote totale d'au moins ${(1.03 / tk.pJoint).toFixed(2).replace(".", ",")} (cote boostée, ou information que le marché n'a pas).` + ` ${choice.reason}`;
       const body = { scenario: sc.id, label: sc.label, week: win.week, window: [win.from, win.to], target: [sc.lo, sc.hi], arm: undefined, strategy: arm.id, strategyLabel: arm.label, why,
+        book: tk.book, bookName: tk.book ? FR_NAMES()[tk.book] || tk.book : "Bet 365 (aucune cote française)",
         legs, totalOdds: Math.round(tk.totalOdds * 100) / 100, rawOdds: Math.round(tk.rawOdds * 100) / 100, boost: tk.boost, pJoint: tk.pJoint, ev: tk.ev, stake: sc.stake, updatedAt: now };
       if (mine) {
         const same = mine.legs.length === legs.length && mine.legs.every((l, i) => l.matchId === legs[i].matchId && l.sel === legs[i].sel && l.odds === legs[i].odds);
         if (!same) { Object.assign(mine, body); mine.revisions = (mine.revisions || 0) + 1; }
+        else Object.assign(mine, { book: body.book, bookName: body.bookName, why: body.why, strategy: body.strategy, strategyLabel: body.strategyLabel, pJoint: body.pJoint, ev: body.ev });
       } else {
         s.paperTickets.push(Object.assign({ id: U.uid("tk"), createdAt: now, status: "EN ATTENTE", frozen: false, profit: 0, revisions: 0 }, body));
         if (rep) rep.ticketsNew = (rep.ticketsNew || 0) + 1;
       }
     }
   }
-  /** Aperçu des 3 tickets sur une fenêtre (par défaut celle de la semaine ; avant jeudi : les cotes déjà publiées jusqu'à dimanche) */
+  /**
+   * Recherche du meilleur ticket d'une stratégie : construit chez chacun des bookmakers français (un ticket se joue chez un seul),
+   * garde celui qui maximise l'objectif de la stratégie (chance de gain, ou espérance pour « Valeur »). Repli Bet 365 sans cote française.
+   */
+  function bestTicketFinder(ctx, win, bf) {
+    const books = Object.keys(FR_NAMES());
+    let by = books.map((b) => ({ b, c: ticketCandidates(ctx, win, b) })).filter((x) => x.c.length);
+    if (!by.length) by = [{ b: null, c: ticketCandidates(ctx, win, null) }];
+    const all = [].concat(...by.map((x) => x.c));
+    const find = (arm, sc) => {
+      let best = null;
+      for (const { b, c } of by) {
+        const tk = buildTicket(armCands(c, arm), sc, { boost: b === "betclic_fr" ? bf : null, objective: arm.objective, pool: 120, beam: 300 });
+        if (!tk) continue;
+        const sc1 = arm.objective === "ev" ? tk.pJoint * tk.totalOdds : tk.pJoint, sc0 = best ? (arm.objective === "ev" ? best.pJoint * best.totalOdds : best.pJoint) : -1;
+        if (sc1 > sc0) { best = tk; best.book = b; }
+      }
+      return best;
+    };
+    return { all, find };
+  }
+  /** Aperçu des tickets sur une fenêtre (par défaut celle de la semaine ; avant jeudi : les cotes déjà publiées jusqu'à dimanche) */
   function previewTickets(ctx, winArg) {
     const w0 = ticketWindow(ctx.today, ctx.state.settings);
     const win = winArg || (w0.open ? w0 : Object.assign({}, w0, { start: ctx.today }));
-    const cands = ticketCandidates(ctx, win);
+    const f = bestTicketFinder(ctx, win, boostFn(ctx.state)), cands = f.all;
     return scenarios(ctx.state.settings).map((sc) => {
       const c = chooseArm(ctx, sc.id);
-      const tk = buildTicket(armCands(cands, c.arm), sc, { boost: boostFn(ctx.state) });
-      return { sc, rule: c.arm.label, strategy: c.arm.id, reason: c.reason, ticket: tk, nCands: cands.filter((x) => x.top).length, nMatches: new Set(cands.map((x) => x.matchId)).size, win };
+      const tk = f.find(c.arm, sc);
+      return { sc, rule: c.arm.label, strategy: c.arm.id, reason: c.reason, ticket: tk, bookName: tk && tk.book ? FR_NAMES()[tk.book] : null, nCands: cands.filter((x) => x.top).length, nMatches: new Set(cands.map((x) => x.matchId)).size, win };
     });
   }
 
@@ -812,8 +875,8 @@
     const s = ctx.state;
     const t0 = Date.now();
     // réglages introduits depuis : Betclic par défaut (bookmaker d'Iso) tant qu'il n'a pas choisi lui-même, Multiboost activé
-    if (!s.settings.oddsBookUser) s.settings.oddsBook = "betclic_fr";
-    if (s.settings.multiboost === undefined) s.settings.multiboost = true;
+    if (!s.settings.oddsBookUser) s.settings.oddsBook = "best";       // meilleur prix parmi les bookmakers français
+    if (!s.settings.multiboostUser) s.settings.multiboost = false;      // Multiboost seulement si Iso l'active
     s.settings.ticketPolicy = "auto";
     const rep = { at: new Date().toISOString(), origin, audited: 0, settled: 0, analysed: 0, insufficient: 0, autoBets: 0, staked: 0, closed: 0, calibration: null, notes: [] };
     // 1. audit automatique
@@ -890,5 +953,5 @@
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
   FQ.P = { buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
-    SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, armStats, chooseArm, armCands, armAllows, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
+    SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armCands, armAllows, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

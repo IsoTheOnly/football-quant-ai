@@ -771,7 +771,7 @@ window.__fqStartApp = function () {
           <div className="small muted">${pk.why}</div></div>`; })()}
       ${match.oddsFr && match.oddsFr.books && html`<details className="mt-2"><summary className="small">Cotes 1N2 des bookmakers français · relevées le ${dtFR(match.oddsFr.at)}</summary>
         <${TableWrap}><table className="tbl tiny"><thead><tr><th>Bookmaker</th><th>1</th><th>N</th><th>2</th><th>Marge</th></tr></thead><tbody>
-        ${Object.entries(match.oddsFr.books).map(([k, v]) => html`<tr key=${k} className=${k === (ctx.state.settings.oddsBook || "betclic_fr") ? "hl" : ""}><td>${(FQ.ETL.FR_BOOKS || {})[k] || k}</td><td className="mono">${fr(v[0], 2)}</td><td className="mono">${fr(v[1], 2)}</td><td className="mono">${fr(v[2], 2)}</td><td className="mono">${pct(1 / v[0] + 1 / v[1] + 1 / v[2] - 1, 1)}</td></tr>`)}
+        ${Object.entries(match.oddsFr.books).map(([k, v]) => html`<tr key=${k} className=${k === (ctx.state.settings.oddsBook || "best") ? "hl" : ""}><td>${(FQ.ETL.FR_BOOKS || {})[k] || k}</td><td className="mono">${fr(v[0], 2)}</td><td className="mono">${fr(v[1], 2)}</td><td className="mono">${fr(v[2], 2)}</td><td className="mono">${pct(1 / v[0] + 1 / v[1] + 1 / v[2] - 1, 1)}</td></tr>`)}
         </tbody></table><//></details>`}
       ${b.pr.blendInfo && html`<div className="note small mt-2">Cote 1N2 connue (${b.pr.blendInfo.src}) : probabilités retenues = ${Math.round(100 * b.pr.blendInfo.w)} % modèle + ${Math.round(100 * (1 - b.pr.blendInfo.w))} % marché sans marge, poids appris sur 12 mois (sur cet historique, le marché seul prédisait mieux que le modèle seul). Modèle seul : 1 ${pct(b.pr.modelMarkets.p1)} · N ${pct(b.pr.modelMarkets.pN)} · 2 ${pct(b.pr.modelMarkets.p2)}. BTTS : modèle seul (pas de cote BTTS gratuite).</div>`}
       <div className="row gap-3 wrap mt-2 small">
@@ -1197,8 +1197,8 @@ window.__fqStartApp = function () {
   /* =========================================================================
      TICKETS DE LA SEMAINE, PRONOSTICS 14 JOURS, PANIER ET PARIS RÉELS
      ========================================================================= */
-  const SC_HINT = { prudent: "≈ 3 à 4", equilibre: "≈ 7 à 8", audacieux: "≈ 50" };
-  const SC_DESC = { prudent: "Peu de sélections, les plus sûres.", equilibre: "Compromis entre chance et gain.", audacieux: "Gros gain possible, faible chance." };
+  const SC_HINT = { sur: "≈ 1,4 à 1,8", prudent: "≈ 3 à 4", equilibre: "≈ 7 à 8", audacieux: "≈ 50" };
+  const SC_DESC = { sur: "Chance de gain la plus haute (55 à 65 %).", prudent: "Peu de sélections, les plus sûres.", equilibre: "Compromis entre chance et gain.", audacieux: "Gros gain possible, faible chance." };
   const dayLabel = (d, today) => d === today ? "Aujourd'hui" : d === U.addDays(today, 1) ? "Demain" : new Date(d + "T12:00:00Z").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
   const shortDay = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
   function koText(ctx, x, withDay = true) {
@@ -1235,6 +1235,10 @@ window.__fqStartApp = function () {
         <div className="tk-leg-r"><span className="mono" title=${l.estOdds ? "cote estimée d'après le 1N2 : vérifiez le prix" : l.oddsSrc || ""}>${fr(l.odds, 2)}${l.estOdds ? "*" : ""}</span>${l.status && l.status !== "EN ATTENTE" ? html`<span className="tiny mono">${l.score || ""} ${l.status === "GAGNÉ" ? "✓" : l.status === "PERDU" ? "✗" : "—"}</span>` : null}</div>
       </li>`)}</ol>
       <div className="tk-foot">
+        ${U.isNum(t.pJoint) && U.isNum(t.totalOdds) && html`<div className=${"ev-verdict" + (t.pJoint * t.totalOdds - 1 >= 0 ? " pos" : "")}>${t.pJoint * t.totalOdds - 1 >= 0
+          ? html`<b>Espérance positive</b> (+${fr(100 * (t.pJoint * t.totalOdds - 1), 0)} %).`
+          : html`<b>Espérance ${fr(100 * (t.pJoint * t.totalOdds - 1), 0)} %</b> : à jouer seulement à une cote totale d'au moins <b className="mono">${fr(1.03 / t.pJoint, 2)}</b> (cote boostée) ou avec une information que le marché ignore.`}
+          ${t.bookName ? html` <span className="muted">Meilleur prix chez ${t.bookName}.</span>` : ""}</div>`}
         ${(t.why || t.reason) && html`<details className="small"><summary className="muted">Pourquoi ce ticket</summary><p className="small mt-1">${t.why || t.reason}</p></details>`}
         <div className="tk-meta small">
           <span><span className="muted">Chance estimée</span> <b className="mono">${pct(t.pJoint, 1)}</b></span>
@@ -1254,15 +1258,15 @@ window.__fqStartApp = function () {
     const { state, today } = ctx;
     const win = FQ.P.ticketWindow(today, state.settings);
     const mine = (state.paperTickets || []).filter((t) => t.week === win.week);
-    const prev = useMemo(() => (mine.length >= 3 ? null : FQ.P.previewTickets(ctx)), [state.predictions, mine.length, today, ctx.trainedAt]);
+    const prev = useMemo(() => (mine.length >= FQ.P.scenarios(state.settings).length ? null : FQ.P.previewTickets(ctx)), [state.predictions, state.userOdds, mine.length, today, ctx.trainedAt]);
     const items = FQ.P.scenarios(state.settings).map((sc) => {
       const t = mine.find((x) => x.scenario === sc.id);
       if (t) return { sc, t };
       const p = prev && prev.find((x) => x.sc.id === sc.id);
-      return p && p.ticket ? { sc, t: Object.assign({ label: sc.label, scenario: sc.id, stake: sc.stake, strategyLabel: p.rule, reason: p.reason }, p.ticket, { legs: p.ticket.legs }), preview: true } : { sc, t: null };
+      return p && p.ticket ? { sc, t: Object.assign({ label: sc.label, scenario: sc.id, stake: sc.stake, strategyLabel: p.rule, reason: p.reason, bookName: p.bookName }, p.ticket, { legs: p.ticket.legs }), preview: true } : { sc, t: null };
     });
     const bt = FQ.TRAINED && FQ.TRAINED.tickets;
-    return html`<${Card} eyebrow=${`Tickets de la semaine · ${shortDay(win.from)} → ${shortDay(win.to)}`} title="3 tickets, 3 niveaux de risque">
+    return html`<${Card} eyebrow=${`Tickets de la semaine · ${shortDay(win.from)} → ${shortDay(win.to)}`} title="4 tickets, 4 niveaux de risque">
       <p className="muted small lead">${win.open
         ? "Construits sur les matchs du jeudi au dimanche, avec les cotes réelles publiées. Ils sont réoptimisés à chaque mise à jour jusqu'au premier coup d'envoi, puis figés et joués en paper betting (1 u fictive chacun)."
         : "Les tickets de la semaine sont construits à partir de jeudi, quand les cotes du week-end sont publiées. En attendant, voici un aperçu avec les cotes déjà disponibles (non joué)."}</p>
@@ -1275,6 +1279,37 @@ window.__fqStartApp = function () {
           <li>Chance estimée = produit des probabilités de chaque sélection. Espérance = chance × cote − 1 : elle est en général négative, car la marge du bookmaker s'ajoute à chaque sélection. Plus le ticket est long, plus elle s'accumule.</li>
         </ul></details>
     <//>`;
+  }
+
+  /**
+   * Toutes les sélections d'un match : probabilité, cote juste (1/p), cote minimale intéressante ((1 + EV min)/p),
+   * cote disponible (relevée, estimée ou saisie) et verdict. Iso peut saisir la cote qu'il voit, y compris une cote boostée :
+   * elle est enregistrée et utilisée par les choix et les tickets au prochain calcul.
+   */
+  function SelectionTable({ ctx, matchId }) {
+    const { state } = ctx;
+    const m = ctx.matchById.get(matchId);
+    const pred = useMemo(() => { let x = null; for (const p of state.predictions) if (p.matchId === matchId) x = p; return x; }, [state.predictions, matchId]);
+    if (!m || !pred || !pred.markets) return null;
+    const evMin = state.settings.evMin || 0.03;
+    const om = FQ.P.matchOddsMap(m, state.settings, state.oddsLearn, null, state.userOdds) || {};
+    const rows = FQ.P.selectionsOf(pred, m).map(([market, sel, label, p]) => ({ market, sel, label, p }));
+    const pl = (pred.players || []).slice();
+    pl.filter((x) => U.isNum(x.pScore)).sort((a, b) => b.pScore - a.pScore).slice(0, 4).forEach((x) => rows.push({ market: "Buteur", sel: x.name, label: `Buteur : ${x.name}`, p: x.pScore }));
+    pl.filter((x) => U.isNum(x.pDecisive)).sort((a, b) => b.pDecisive - a.pDecisive).slice(0, 3).forEach((x) => rows.push({ market: "Joueur Décisif", sel: x.name, label: `Décisif (but ou passe) : ${x.name}`, p: x.pDecisive }));
+    function setUser(key, v) {
+      ctx.update((s) => { s.userOdds = s.userOdds || {}; if (v > 1) s.userOdds[matchId + "|" + key] = { v, at: new Date().toISOString() }; else delete s.userOdds[matchId + "|" + key]; return s; });
+      ctx.notify(v > 1 ? "Cote enregistrée : elle sera utilisée au prochain calcul" : "Cote saisie retirée");
+    }
+    return html`<div className="mt-2"><div className="eyebrow">Cotes et seuils de toutes les sélections</div>
+      <${TableWrap}><table className="tbl tiny seltbl"><thead><tr><th>Sélection</th><th>Proba.</th><th title="1 / probabilité">Cote juste</th><th title=${`espérance ≥ ${Math.round(100 * evMin)} %`}>Intéressant dès</th><th>Cote dispo</th><th>Espérance</th><th>Ta cote</th></tr></thead><tbody>
+      ${rows.filter((r) => U.isNum(r.p) && r.p > 0.01).map((r) => { const key = r.market + "|" + r.sel, od = om[key], ev = od ? r.p * od.v - 1 : null, u = (state.userOdds || {})[matchId + "|" + key];
+        return html`<tr key=${key}><td>${r.label}</td><td className="mono">${pct(r.p, 0)}</td><td className="mono">${fr(1 / r.p, 2)}</td><td className="mono"><b>${fr((1 + evMin) / r.p, 2)}</b></td>
+          <td className="mono" title=${od ? od.src : "aucune cote relevée"}>${od ? html`${fr(od.v, 2)}${od.est ? "*" : ""}${od.user ? html` <span className="muted">(toi)</span>` : ""}` : html`<span className="muted">—</span>`}</td>
+          <td className=${"mono " + (ev === null ? "" : ev >= evMin ? "t-pos" : ev < 0 ? "t-neg" : "")}>${ev === null ? "—" : sgn(100 * ev, 0) + " %"}</td>
+          <td><${NumInput} value=${u ? u.v : null} min=${1.01} max=${1000} placeholder="cote" onChange=${(v) => setUser(key, v)} /></td></tr>`; })}
+      </tbody></table><//>
+      <p className="tiny muted mt-1">« Intéressant dès » : cote minimale pour une espérance d'au moins ${Math.round(100 * evMin)} % selon nos probabilités. Saisis la cote que tu vois (même boostée) : l'espérance se recalcule et la sélection peut entrer dans les tickets. * = cote estimée (double chance déduite du 1N2).</p></div>`;
   }
 
   function MatchPicks({ ctx }) {
@@ -1303,11 +1338,11 @@ window.__fqStartApp = function () {
           <div className="mc-teams ellip">${p.home} <span className="muted">–</span> ${p.away}</div>
           <div className="mc-pick"><span className="mc-sel">${p.label}</span><span className="pbar" aria-hidden="true"><i style=${{ width: Math.round(100 * p.p) + "%" }}></i></span><span className="mono small">${pct(p.p, 0)}</span></div>
           <div className="muted tiny">${p.odds ? html`cote <b className="mono t-fg">${fr(p.odds, 2)}</b> <span title=${p.oddsSrc || ""}>${srcShort(p.oddsSrc)}</span>${p.kind === "value" ? html` · <span className="t-pos">value bet</span>` : ""}` : html`aucune cote de bookmaker pour ce marché · à jouer à partir de <span className="mono">${fr(p.minOdds, 2)}</span> (seuil du modèle)`} · fiabilité ${p.rel}/100</div>
-          ${open === p.id && html`<div className="small mt-1 explain-in"><div>${p.why}</div><div className="muted tiny mt-1">Règle : une value bet admissible (cote connue, espérance ≥ seuil, fiabilité suffisante) est choisie en priorité ; sinon l'issue la plus probable parmi 1, N, 2 et « les deux équipes marquent » oui / non. Choix figé au coup d'envoi.</div></div>`}
+          ${open === p.id && html`<div className="small mt-1 explain-in"><div>${p.why}</div><${SelectionTable} ctx=${ctx} matchId=${p.matchId} /><div className="muted tiny mt-1">Règle : une value bet admissible (cote connue, espérance ≥ seuil, fiabilité suffisante) est choisie en priorité ; sinon l'issue la plus probable parmi 1, N, 2 et « les deux équipes marquent » oui / non. Choix figé au coup d'envoi.</div></div>`}
         </div>
         <div className="mc-act">
           <${Btn} small kind=${added ? "primary" : "ghost"} onClick=${() => ctx.toggleSlip(p)} title="Ajouter à mon ticket">${added ? html`<${Ic} n="Check" /> Ajouté` : html`<${Ic} n="Plus" /> Ticket`}<//>
-          <button className="iconbtn" aria-label="Pourquoi ce choix" title="Pourquoi ce choix" onClick=${() => setOpen(open === p.id ? null : p.id)}><${Ic} n="Info" s=${15} /></button>
+          <button className="iconbtn" aria-label="Pourquoi ce choix, cotes et seuils" title="Pourquoi ce choix · cotes et seuils · saisir une cote" onClick=${() => setOpen(open === p.id ? null : p.id)}><${Ic} n="Info" s=${15} /></button>
           ${m && html`<button className="iconbtn" aria-label="Analyse complète" title="Analyse complète" onClick=${() => ctx.analyze(p.matchId)}><${Ic} n="ChartColumn" s=${15} /></button>`}
         </div>
       </div>`; })}</div>`}
@@ -1978,9 +2013,10 @@ window.__fqStartApp = function () {
       <div className="row justify-between items-center"><h3>Paramètres (${ctx.mode === "demo" ? "démo" : "réel"})</h3><button className="iconbtn" onClick=${onClose} aria-label="Fermer"><${Ic} n="X" /></button></div>
       <p className="muted small">Garde-fous initiaux prudents, modifiables. Ce ne sont pas des seuils universellement optimaux.</p>
       <div className="filters">
-        <${Field} label="Bookmaker de référence" id="s-book" hint="cotes utilisées pour les choix et les tickets ; s'il n'a pas coté un match : médiane des bookmakers français, puis Bet 365"><select id="s-book" className="inp" value=${s.oddsBook || "betclic_fr"} onChange=${(e) => setS({ ...s, oddsBook: e.target.value, oddsBookUser: true })}>
+        <${Field} label="Bookmaker de référence" id="s-book" hint="cotes utilisées pour les choix et les tickets ; s'il n'a pas coté un match : médiane des bookmakers français, puis Bet 365"><select id="s-book" className="inp" value=${s.oddsBook || "best"} onChange=${(e) => setS({ ...s, oddsBook: e.target.value, oddsBookUser: true })}>
+          <option value="best">Meilleur prix des 5 bookmakers français</option>
           ${Object.entries((FQ.ETL && FQ.ETL.FR_BOOKS) || {}).map(([k, v]) => html`<option key=${k} value=${k}>${v}</option>`)}</select><//>
-        <${Field} label="Multiboost Betclic" id="s-mb" hint="bonus de cote des combinés à partir de 5 sélections, appliqué si le bookmaker de référence est Betclic"><select id="s-mb" className="inp" value=${s.multiboost === false ? "off" : "on"} onChange=${(e) => setS({ ...s, multiboost: e.target.value === "on" })}><option value="on">Appliqué</option><option value="off">Ignoré</option></select><//>
+        <${Field} label="Multiboost Betclic" id="s-mb" hint="bonus de cote des combinés Betclic à partir de 5 sélections ; barème appris sur tes tickets Betclic saisis"><select id="s-mb" className="inp" value=${s.multiboost === true ? "on" : "off"} onChange=${(e) => setS({ ...s, multiboost: e.target.value === "on", multiboostUser: true })}><option value="off">Ignoré</option><option value="on">Appliqué (tickets chiffrés chez Betclic)</option></select><//>
         ${F("initialBankroll", "Capital de référence (unités)", "aucune bankroll réelle : 100 u par défaut", 1)}
         ${F("kellyFraction", "Kelly fractionné (%)", "25 % par défaut", 100)}
         ${F("maxStakePct", "Mise maximale (% bankroll)", "1 % par défaut", 100)}

@@ -565,8 +565,8 @@
     ticketFromDow: 4,        // tickets de la semaine : construits à partir du jeudi, sur les matchs du jeudi au dimanche (cotes publiées 3 jours avant)
     paperTickets: true,      // paper betting des 3 tickets (unités fictives, 1 u par ticket)
     ticketPolicy: "auto",    // stratégies de ticket : "auto" (l'apprentissage choisit parmi toutes) ou "favoris" (issue la plus probable de chaque match seulement)
-    oddsBook: "betclic_fr",  // bookmaker français de référence pour les cotes (The Odds API) ; repli : médiane des bookmakers FR, puis Bet 365
-    multiboost: true,        // Multiboost Betclic : cote totale relevée selon le nombre de sélections (barème appris sur les tickets réels)
+    oddsBook: "best",        // cotes : meilleur prix parmi les bookmakers français (The Odds API), ou un bookmaker choisi ; repli Bet 365
+    multiboost: false,       // Multiboost Betclic (option) : bonus de cote des combinés chiffrés chez Betclic
     ticketCfg: null,         // null = scénarios par défaut ; sinon [{ id, lo, hi, stake }]
   };
   FQ.DEFAULT_SETTINGS = DEFAULT_SETTINGS;

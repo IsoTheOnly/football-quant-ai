@@ -112,7 +112,7 @@ window.__fqStartApp = function () {
      ========================================================================= */
   function App() {
     const today = useMemo(() => FQ.time.dateInTz(Date.now(), "Europe/Paris"), []);
-    const [mode, setModeRaw] = useState(() => P.pref("mode") || "demo");
+    const [mode, setModeRaw] = useState("real"); // une seule base : les vrais matchs (le mode démo fictif a été retiré)
     const [states, setStates] = useState({ demo: null, real: null });
     const [persistInfo, setPersistInfo] = useState({ kind: "…", saved: null, error: null, loadedFrom: {} });
     const [tab, setTab] = useState(() => { const h = (location.hash || "").slice(1); return ["dashboard", "pronostics", "audit", "performance"].includes(h) ? h : "dashboard"; });
@@ -123,7 +123,7 @@ window.__fqStartApp = function () {
     const [slip, setSlip] = useState([]);
     const [realForm, setRealForm] = useState(null);
 
-    const demoData = useMemo(() => FQ.demo.generateDemo(today), [today]);
+    const demoData = useMemo(() => ({ matches: [], results: {}, players: {}, odds: {}, hidden: {} }), []);
     const [dataset, setDatasetRaw] = useState(DATASET);
     const [trainedAt, setTrainedAt] = useState(FQ.TRAINED ? FQ.TRAINED.generatedAt : null);
     const setDataset = (ds) => { indexComps(ds); DATASET = ds; setDatasetRaw(ds); };
@@ -164,17 +164,6 @@ window.__fqStartApp = function () {
     const notify = useCallback((text, tone = "info") => { setToast({ text, tone, k: Date.now() }); }, []);
     useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 3800); return () => clearTimeout(t); }, [toast]);
 
-    function seedDemo(settings) {
-      const s = FQ.emptyState(settings);
-      const h = FQ.demo.seedDemoHistory(demoData, today, s.settings);
-      Object.assign(s, h);
-      s.results = Object.assign({}, demoData.results);
-      s.demoDay = today;
-      Object.entries(demoData.players).forEach(([k, pl]) => (s.players[k] = pl.slice(0, 3).map((p) => Object.assign({}, p, { sharesFromData: false, note: "joueur fictif (démo)" }))));
-      s.log.push({ t: new Date().toISOString(), text: "Jeu de démonstration généré (graine fixe)" });
-      return s;
-    }
-
     // chargement initial
     useEffect(() => {
       (async () => {
@@ -189,8 +178,7 @@ window.__fqStartApp = function () {
           } catch (e) { /* repli */ }
         }
         if (!r) r = await P.load("real");
-        const d = await P.load("demo");
-        let demoState = d && d.state && d.state.demoDay === today && !FQ.validateState(d.state).length ? d.state : seedDemo();
+        let demoState = FQ.emptyState();
         let realState = r && r.state && !FQ.validateState(r.state).length ? r.state : FQ.emptyState();
         if (!realState.schemaData || realState.schemaData < 2) {
           // nouvelles sources (identifiants ESPN) : les analyses automatiques de l'ancien jeu openfootball ne sont pas reprises
@@ -201,7 +189,7 @@ window.__fqStartApp = function () {
         for (const st of [realState, demoState]) if (st.settings.currency !== "u" && !st.bets.length) Object.assign(st.settings, { initialBankroll: 100, currency: "u", unitMode: true, minStake: 0.1 });
         if (realState.settings.currency === "u" && (!r || !r.state)) dirty.current.real = true;
         setStates({ demo: demoState, real: realState });
-        setPersistInfo((p) => Object.assign({}, p, { kind, loadedFrom: { real: r ? r.from : "nouvel état", demo: d && d.state && d.state.demoDay === today ? d.from : "régénéré" } }));
+        setPersistInfo((p) => Object.assign({}, p, { kind, loadedFrom: { real: r ? r.from : "nouvel état" } }));
       })();
     }, []);
 
@@ -236,7 +224,7 @@ window.__fqStartApp = function () {
     const saveTimer = useRef({});
     const dirty = useRef({});
     useEffect(() => {
-      for (const m of ["demo", "real"]) {
+      for (const m of ["real"]) {
         if (!states[m] || !dirty.current[m]) continue;
         clearTimeout(saveTimer.current[m]);
         const snap = states[m];
@@ -330,10 +318,6 @@ window.__fqStartApp = function () {
         <header className="topbar">
           <div className="topbar-in">
             <div className="brand"><span className="brand-mark">FQ</span><div><div className="brand-n">Football Quant AI</div><div className="brand-s">moteur ${FQ.ENGINE_VERSION} · ${dFR(today)}</div></div></div>
-            <div className="mode-switch" role="radiogroup" aria-label="Mode">
-              <button role="radio" aria-checked=${mode === "demo"} className=${mode === "demo" ? "on" : ""} onClick=${() => setMode("demo")}>Démo</button>
-              <button role="radio" aria-checked=${mode === "real"} className=${mode === "real" ? "on" : ""} onClick=${() => setMode("real")}>Réel</button>
-            </div>
             <button className="pl-chip" onClick=${() => setTab("audit")} title="Paper betting : tickets fictifs, 1 u chacun">
               <span className="muted tiny">Paper</span><b className=${"mono " + (paperS.profit > 0 ? "t-pos" : paperS.profit < 0 ? "t-neg" : "")}>${sgn(paperS.profit)} u</b></button>
             <button className="pl-chip" onClick=${() => setTab("audit")} title="Vos paris réels saisis">
@@ -348,8 +332,6 @@ window.__fqStartApp = function () {
             ${TABS.map((t) => html`<button key=${t.id} role="tab" aria-selected=${tab === t.id} className=${tab === t.id ? "on" : ""} onClick=${() => { setTab(t.id); try { history.replaceState(null, "", "#" + t.id); } catch (e) {} }}><${Ic} n=${t.icon} /> ${t.label}</button>`)}
           </nav>
         </header>
-        ${mode === "demo" ? html`<div className="banner demo"><${Ic} n="FlaskConical" /> <b>Mode démonstration</b> — équipes, joueurs, résultats et cotes fictifs, reproductibles. Ces chiffres ne contaminent jamais le mode réel.</div>`
-          : null}
         <main className="main">
           <${AutoPilot} ctx=${ctx} />
           ${tab === "dashboard" && html`<${Dashboard} ctx=${ctx} />`}
@@ -361,7 +343,7 @@ window.__fqStartApp = function () {
           Outil d'aide à la décision : aucune rentabilité n'est garantie. Pariez uniquement ce que vous pouvez perdre. Aide : joueurs-info-service.fr — 09 74 75 13 13.
         </footer>
         ${panel === "settings" && html`<${SettingsPanel} ctx=${ctx} onClose=${() => setPanel(null)} />`}
-        ${panel === "data" && html`<${DataPanel} ctx=${ctx} onClose=${() => setPanel(null)} reseed=${() => { update(() => seedDemo(state.settings), "demo"); notify("Démo réinitialisée", "pos"); }} />`}
+        ${panel === "data" && html`<${DataPanel} ctx=${ctx} onClose=${() => setPanel(null)} reseed=${() => {}} />`}
         <${ExportBox} payload=${exportPayload} onClose=${() => setExportPayload(null)} />
         <${SlipBar} ctx=${ctx} />
         ${realForm && html`<${RealBetForm} ctx=${ctx} init=${realForm} onClose=${() => setRealForm(null)} />`}
@@ -789,7 +771,7 @@ window.__fqStartApp = function () {
           <div className="small muted">${pk.why}</div></div>`; })()}
       ${match.oddsFr && match.oddsFr.books && html`<details className="mt-2"><summary className="small">Cotes 1N2 des bookmakers français · relevées le ${dtFR(match.oddsFr.at)}</summary>
         <${TableWrap}><table className="tbl tiny"><thead><tr><th>Bookmaker</th><th>1</th><th>N</th><th>2</th><th>Marge</th></tr></thead><tbody>
-        ${Object.entries(match.oddsFr.books).map(([k, v]) => html`<tr key=${k} className=${k === (ctx.state.settings.oddsBook || "winamax_fr") ? "hl" : ""}><td>${(FQ.ETL.FR_BOOKS || {})[k] || k}</td><td className="mono">${fr(v[0], 2)}</td><td className="mono">${fr(v[1], 2)}</td><td className="mono">${fr(v[2], 2)}</td><td className="mono">${pct(1 / v[0] + 1 / v[1] + 1 / v[2] - 1, 1)}</td></tr>`)}
+        ${Object.entries(match.oddsFr.books).map(([k, v]) => html`<tr key=${k} className=${k === (ctx.state.settings.oddsBook || "betclic_fr") ? "hl" : ""}><td>${(FQ.ETL.FR_BOOKS || {})[k] || k}</td><td className="mono">${fr(v[0], 2)}</td><td className="mono">${fr(v[1], 2)}</td><td className="mono">${fr(v[2], 2)}</td><td className="mono">${pct(1 / v[0] + 1 / v[1] + 1 / v[2] - 1, 1)}</td></tr>`)}
         </tbody></table><//></details>`}
       ${b.pr.blendInfo && html`<div className="note small mt-2">Cote 1N2 connue (${b.pr.blendInfo.src}) : probabilités retenues = ${Math.round(100 * b.pr.blendInfo.w)} % modèle + ${Math.round(100 * (1 - b.pr.blendInfo.w))} % marché sans marge, poids appris sur 12 mois (sur cet historique, le marché seul prédisait mieux que le modèle seul). Modèle seul : 1 ${pct(b.pr.modelMarkets.p1)} · N ${pct(b.pr.modelMarkets.pN)} · 2 ${pct(b.pr.modelMarkets.p2)}. BTTS : modèle seul (pas de cote BTTS gratuite).</div>`}
       <div className="row gap-3 wrap mt-2 small">
@@ -1245,16 +1227,18 @@ window.__fqStartApp = function () {
     const badge = preview ? html`<${Pill} tone="muted">aperçu<//>` : settled ? html`<${Pill} tone=${STATUS_TONE[st] || "muted"}>${st}<//>` : t.frozen ? html`<${Pill} tone="info">en cours<//>` : html`<${Pill} tone="accent">ouvert jusqu'au 1er coup d'envoi<//>`;
     return html`<article className=${"ticket tk-" + id + (settled ? " tk-done" : "")}>
       <header className="tk-h">
-        <div className="min-w-0"><div className="tk-name">${t.label || sc.label}</div><div className="muted tiny">${SC_DESC[id] || ""} Objectif ${SC_HINT[id] || ""}.</div></div>
+        <div className="min-w-0"><div className="tk-name">${t.label || sc.label}</div><div className="muted tiny">${SC_DESC[id] || ""} Objectif ${SC_HINT[id] || ""}.</div>${(t.strategyLabel || t.rule) && html`<div className="tiny mt-1"><${Pill} tone="info">${t.strategyLabel || t.rule}<//></div>`}</div>
         <div className="tk-odds"><span className="muted tiny">cote</span><b className="mono">${fr(t.totalOdds, 2)}</b></div>
       </header>
       <ol className="tk-legs">${t.legs.map((l, i) => html`<li key=${i} className=${"tk-leg" + (l.status === "GAGNÉ" ? " ok" : l.status === "PERDU" ? " ko" : "")}>
-        <div className="min-w-0"><div className="muted tiny mono">${koText(ctx, l)} · ${SHORT[l.comp] || l.comp}</div><div className="small ellip">${l.home} – ${l.away}</div><div className="small"><b>${l.label}</b></div></div>
-        <div className="tk-leg-r"><span className="mono">${fr(l.odds, 2)}</span>${l.status && l.status !== "EN ATTENTE" ? html`<span className="tiny mono">${l.score || ""} ${l.status === "GAGNÉ" ? "✓" : l.status === "PERDU" ? "✗" : "—"}</span>` : null}</div>
+        <div className="min-w-0"><div className="muted tiny mono">${koText(ctx, l)} · ${SHORT[l.comp] || l.comp}</div><div className="small ellip">${l.home} – ${l.away}</div><div className="small"><b>${l.label}</b>${U.isNum(l.p) ? html` <span className="muted mono tiny">${pct(l.p, 0)}</span>` : ""}</div>${l.why && html`<details className="tiny muted"><summary>pourquoi</summary>${l.why}</details>`}</div>
+        <div className="tk-leg-r"><span className="mono" title=${l.estOdds ? "cote estimée d'après le 1N2 : vérifiez le prix" : l.oddsSrc || ""}>${fr(l.odds, 2)}${l.estOdds ? "*" : ""}</span>${l.status && l.status !== "EN ATTENTE" ? html`<span className="tiny mono">${l.score || ""} ${l.status === "GAGNÉ" ? "✓" : l.status === "PERDU" ? "✗" : "—"}</span>` : null}</div>
       </li>`)}</ol>
       <div className="tk-foot">
+        ${(t.why || t.reason) && html`<details className="small"><summary className="muted">Pourquoi ce ticket</summary><p className="small mt-1">${t.why || t.reason}</p></details>`}
         <div className="tk-meta small">
           <span><span className="muted">Chance estimée</span> <b className="mono">${pct(t.pJoint, 1)}</b></span>
+          ${t.boost ? html`<span><span className="muted">Multiboost</span> <b className="mono">+${fr(100 * t.boost, 1)} %</b></span>` : null}
           <span><span className="muted">Espérance</span> <b className=${"mono " + (t.ev >= 0 ? "t-pos" : "t-neg")}>${sgn(100 * t.ev, 1)} %</b></span>
           <span><span className="muted">Mise fictive</span> <b className="mono">${fr(t.stake || 1, 0)} u</b></span>
         </div>
@@ -1275,7 +1259,7 @@ window.__fqStartApp = function () {
       const t = mine.find((x) => x.scenario === sc.id);
       if (t) return { sc, t };
       const p = prev && prev.find((x) => x.sc.id === sc.id);
-      return p && p.ticket ? { sc, t: Object.assign({ label: sc.label, scenario: sc.id, stake: sc.stake }, p.ticket), preview: true } : { sc, t: null };
+      return p && p.ticket ? { sc, t: Object.assign({ label: sc.label, scenario: sc.id, stake: sc.stake, strategyLabel: p.rule, reason: p.reason }, p.ticket, { legs: p.ticket.legs }), preview: true } : { sc, t: null };
     });
     const bt = FQ.TRAINED && FQ.TRAINED.tickets;
     return html`<${Card} eyebrow=${`Tickets de la semaine · ${shortDay(win.from)} → ${shortDay(win.to)}`} title="3 tickets, 3 niveaux de risque">
@@ -1286,9 +1270,9 @@ window.__fqStartApp = function () {
         : html`<article key=${sc.id} className=${"ticket tk-" + sc.id + " tk-empty"}><div className="tk-name">${sc.label}</div><div className="muted small">Pas encore assez de matchs avec cote pour viser une cote ${SC_HINT[sc.id]}. Les cotes arrivent environ 3 jours avant les matchs.</div></article>`)}</div>
       <details className="mt-2 small"><summary className="muted">Comment lire ces tickets</summary>
         <ul className="notes muted">
-          <li>Chaque ticket maximise la chance de passer pour une cote totale dans la fourchette visée, avec au plus une sélection par match.</li>
+          <li>Plusieurs stratégies sont suivies chaque semaine (favoris à 45, 55 ou 65 % minimum, chance maximale avec ou sans nul). Celle qui a le meilleur taux de réussite attendu, d'après les semaines rejouées puis les semaines réelles, est jouée ; les autres sont suivies en fantôme pour apprendre. Détail dans Performance › Apprentissage continu.</li>
+          <li>Chaque ticket a la plus forte chance de passer possible pour une cote totale dans la fourchette visée, avec au plus une sélection par match et une justification par sélection.</li>
           <li>Chance estimée = produit des probabilités de chaque sélection. Espérance = chance × cote − 1 : elle est en général négative, car la marge du bookmaker s'ajoute à chaque sélection. Plus le ticket est long, plus elle s'accumule.</li>
-          ${bt && bt.scenarios && html`<li>Rejoué sur l'historique (une semaine = un ticket par niveau, cotes réelles d'avant-match) : ${bt.scenarios.map((s) => `${s.label} ${s.chosen.test.n ? `${s.chosen.test.won}/${s.chosen.test.n} gagnés sur la saison en cours, rendement ${s.chosen.test.roi === null ? "—" : sgn(100 * s.chosen.test.roi, 0) + " %"}` : "pas assez de semaines testées"}`).join(" ; ")}.</li>`}
         </ul></details>
     <//>`;
   }
@@ -1346,6 +1330,7 @@ window.__fqStartApp = function () {
   const BET_MARKETS = [
     { id: "1N2", label: "Résultat (1N2)", sels: [["1", "1"], ["N", "N · nul"], ["2", "2"]] },
     { id: "DC", label: "Double chance", sels: [["1N", "1N"], ["12", "12"], ["N2", "N2"]] },
+    { id: "W2", label: "Gagne ou 2 buts d'avance", sels: [["1", "1"], ["2", "2"]] },
     { id: "BTTS", label: "Les deux équipes marquent", sels: [["Oui", "Oui"], ["Non", "Non"]] },
     { id: "Buts", label: "Nombre de buts", sels: ["+0.5", "+1.5", "+2.5", "+3.5", "+4.5", "-0.5", "-1.5", "-2.5", "-3.5", "-4.5"].map((x) => [x, (x[0] === "+" ? "Plus de " : "Moins de ") + x.slice(1).replace(".", ",") + " buts"]) },
     { id: "Buteur", label: "Buteur", text: "Nom du joueur" },
@@ -1355,7 +1340,8 @@ window.__fqStartApp = function () {
   const nrm = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   function legLabel(m, market, sel) {
     if (market === "1N2") return sel === "1" ? `1 · ${m.home}` : sel === "2" ? `2 · ${m.away}` : "N · match nul";
-    if (market === "DC") return `Double chance ${sel}`;
+    if (market === "DC") return sel === "1N" ? `${m.home} ou nul` : sel === "N2" ? `Nul ou ${m.away}` : `${m.home} ou ${m.away}`;
+    if (market === "W2") return `${sel === "1" ? m.home : m.away} gagne ou 2 buts d'avance`;
     if (market === "BTTS") return sel === "Oui" ? "Les deux équipes marquent" : "Au moins une équipe ne marque pas";
     if (market === "Buts") return (sel[0] === "+" ? "Plus de " : "Moins de ") + sel.slice(1).replace(".", ",") + " buts";
     if (market === "Buteur") return `Buteur : ${sel}`;
@@ -1375,15 +1361,16 @@ window.__fqStartApp = function () {
     const res = nq.length >= 2 ? pool.filter((m) => nrm(m.home + " " + m.away).includes(nq) && !taken.has(m.id)).slice(0, 8) : [];
     const m = mid ? ctx.matchById.get(mid) : null;
     const M = BET_MARKETS.find((x) => x.id === mkt);
-    const ref = m && mkt === "1N2" ? FQ.P.refOdds(m, ctx.state.settings) : null;
-    const refV = ref ? ref[{ 1: "h", N: "d", 2: "a" }[sel]] : null;
+    const om = m ? FQ.P.matchOddsMap(m, ctx.state.settings, ctx.state.oddsLearn) : null;
+    const refO = om && !M.text ? om[mkt + "|" + sel] : null;
+    const ref = refO ? { src: refO.src } : null, refV = refO ? refO.v : null;
     const selV = M.text ? txt.trim() : sel;
     const ok = m && selV && (!odds || odds > 1);
     function add() {
       if (!ok) return;
       const ko = FQ.time.kickoffUtc(m.date, m.time, m.tz);
       onAdd({ matchId: m.id, comp: m.comp, date: m.date, time: m.time || "", kickoff: ko ? new Date(ko).toISOString() : null, home: m.home, away: m.away,
-        market: mkt, sel: selV, label: legLabel(m, mkt, selV), p: null, odds: odds > 1 ? odds : null, status: "EN ATTENTE" });
+        market: mkt, sel: selV, label: legLabel(m, mkt, selV), p: null, odds: odds > 1 ? odds : null, estOdds: refO && refO.est ? refO.v : null, status: "EN ATTENTE" });
       setMid(null); setQ(""); setOdds(null); setTxt("");
     }
     return html`<div className="subform">
@@ -1394,9 +1381,9 @@ window.__fqStartApp = function () {
       : html`<div className="row gap-2 items-center wrap mb-2"><span className="comp-tag">${SHORT[m.comp] || m.comp}</span><b>${m.home} – ${m.away}</b><span className="muted small">${koText(ctx, m)}</span><button className="link small" onClick=${() => setMid(null)}>changer</button></div>
         <div className="form-grid">
           <${Field} label="Marché" id="lp-m"><select id="lp-m" className="inp" value=${mkt} onChange=${(e) => { const x = BET_MARKETS.find((y) => y.id === e.target.value); setMkt(x.id); if (x.sels) setSel(x.sels[0][0]); }}>${BET_MARKETS.map((x) => html`<option key=${x.id} value=${x.id}>${x.label}</option>`)}</select><//>
-          ${M.sels ? html`<${Field} label="Sélection" id="lp-s"><select id="lp-s" className="inp" value=${sel} onChange=${(e) => setSel(e.target.value)}>${M.sels.map(([v, l]) => html`<option key=${v} value=${v}>${mkt === "1N2" ? legLabel(m, "1N2", v) : l}</option>`)}</select><//>`
+          ${M.sels ? html`<${Field} label="Sélection" id="lp-s"><select id="lp-s" className="inp" value=${sel} onChange=${(e) => setSel(e.target.value)}>${M.sels.map(([v, l]) => html`<option key=${v} value=${v}>${["1N2", "DC", "W2"].includes(mkt) ? legLabel(m, mkt, v) : l}</option>`)}</select><//>`
             : html`<${Field} label=${M.text} id="lp-t"><input id="lp-t" className="inp" value=${txt} onChange=${(e) => setTxt(e.target.value)} /><//>`}
-          <${Field} label="Cote obtenue" id="lp-o" hint=${refV ? `repère : ${fr(refV, 2)} chez ${srcShort(ref.src)}` : "facultative si vous saisissez la cote totale"}><${NumInput} id="lp-o" value=${odds} min=${1.01} max=${1000} placeholder=${refV ? fr(refV, 2) : "ex. 1,85"} onChange=${setOdds} /><//>
+          <${Field} label="Cote obtenue" id="lp-o" hint=${refV ? `repère : ${fr(refV, 2)}${refO.est ? " (estimée)" : ` chez ${srcShort(ref.src)}`}` : "facultative si vous saisissez la cote totale"}><${NumInput} id="lp-o" value=${odds} min=${1.01} max=${1000} placeholder=${refV ? fr(refV, 2) : "ex. 1,85"} onChange=${setOdds} /><//>
         </div>
         <div className="row justify-end mt-2"><${Btn} small kind="primary" disabled=${!ok} onClick=${add}><${Ic} n="Plus" /> Ajouter au ticket<//></div>`}
     </div>`;
@@ -1439,7 +1426,7 @@ window.__fqStartApp = function () {
     }
     return html`<div className="overlay" role="dialog" aria-modal="true" aria-label="Saisir mon ticket réel"><div className="dialog wide">
       <h3>Saisir mon ticket réel</h3>
-      <p className="muted small">Ajoutez chaque sélection jouée, avec la cote obtenue chez votre bookmaker, puis la mise. Résultat, double chance, les deux équipes marquent et nombre de buts sont réglés automatiquement ; un buteur est confirmé automatiquement s'il a marqué, sinon à vérifier à la main.</p>
+      <p className="muted small">Ajoutez chaque sélection jouée, avec la cote obtenue chez votre bookmaker, puis la cote totale affichée (Multiboost compris) et la mise. Résultat, double chance, gagne ou 2 buts d'avance, les deux équipes marquent et nombre de buts sont réglés automatiquement ; un buteur est confirmé automatiquement s'il a marqué, sinon à vérifier à la main. Vos cotes réelles servent à corriger les estimations (double chance, Multiboost).</p>
       <div className="form-grid">
         <${Field} label="Nom" id="rb-l"><input id="rb-l" className="inp" value=${label} onChange=${(e) => setLabel(e.target.value)} /><//>
         <${Field} label="Bookmaker" id="rb-b"><input id="rb-b" className="inp" list="rb-books" value=${book} placeholder="ex. Winamax" onChange=${(e) => setBook(e.target.value)} /><datalist id="rb-books">${BOOKS.map((b) => html`<option key=${b} value=${b} />`)}</datalist><//>
@@ -1707,6 +1694,48 @@ window.__fqStartApp = function () {
     <//>`;
   }
 
+  /**
+   * Apprentissage continu : qualité des probabilités face au marché, stratégies de ticket (rejouées puis réelles, choix courant)
+   * et audit de chaque semaine terminée.
+   */
+  function LearningCard({ ctx }) {
+    const { state, today } = ctx;
+    const T = FQ.TRAINED || {}, bl = T.blend || {}, dv = bl.devigDetail || null;
+    const week = U.weekMonday(today);
+    const scs = FQ.P.scenarios(state.settings);
+    const log = (state.learnLog || []).slice().reverse();
+    const stTone = (x) => (x === "GAGNÉ" ? "pos" : x === "PERDU" ? "neg" : "muted");
+    return html`<${Card} eyebrow="Amélioration continue" title="Apprentissage continu">
+      <p className="muted small lead">Le système se réentraîne chaque semaine sur les vrais matchs (validation chronologique : il n'apprend que sur le passé et se mesure sur des matchs qu'il n'a pas vus). Chaque semaine terminée est auditée, et le choix de stratégie des tickets est mis à jour d'après les résultats réels.</p>
+      <div className="eyebrow mt-2">Qualité des probabilités 1N2 · période de test · log loss (plus bas = meilleur)</div>
+      ${dv ? html`<${TableWrap}><table className="tbl tiny"><thead><tr><th>Méthode</th><th>Log loss</th></tr></thead><tbody>
+        <tr><td>Modèle seul</td><td className="mono">${fr(bl.testModelLL, 4)}</td></tr>
+        <tr><td>Marché, marge retirée à parts égales</td><td className="mono">${fr(dv.testNorm, 4)}</td></tr>
+        <tr><td>Marché, marge retirée surtout sur les outsiders (puissance)</td><td className="mono">${fr(dv.testPower, 4)}</td></tr>
+        <tr className="hl"><td><b>Retenu : ${bl.devig === "power" ? "puissance" : "parts égales"}${Object.keys(bl.byComp || {}).length ? ` + modèle mêlé pour ${Object.entries(bl.byComp).map(([c, w]) => `${SHORT[c] || c} (${Math.round(100 * w)} %)`).join(", ")}` : ""}</b></td><td className="mono"><b>${fr((T.summary0 || {}).testLLFinal, 4)}</b></td></tr>
+      </tbody></table><//>
+      <p className="tiny muted mt-1">Sur ces données, les cotes du marché prédisent mieux que le modèle seul ; le modèle n'est mêlé que là où il améliore le test. Entraînement du ${dFR((T.generatedAt || "").slice(0, 10))}, ${(T.summary || {}).testPredictions || "—"} matchs de test.</p>` : html`<p className="small muted">Disponible après le prochain réentraînement.</p>`}
+      <div className="eyebrow mt-3">Stratégies de ticket · taux de réussite</div>
+      ${scs.map((sc) => { const stats = FQ.P.armStats(ctx, sc.id); const ch = (state.armChoice || {})[week + "|" + sc.id];
+        const tr = (T.tickets && (T.tickets.scenarios || []).find((x) => x.id === sc.id)) || {};
+        return html`<div key=${sc.id} className="mt-2"><div className="small"><b>${sc.label}</b> <span className="muted">· cote ${fr(sc.lo, 0)} à ${fr(sc.hi, 0)}</span></div>
+        <${TableWrap}><table className="tbl tiny"><thead><tr><th>Stratégie</th><th>Semaines rejouées</th><th>Attendu</th><th>Sélections moy.</th><th>Semaines réelles</th><th>Taux attendu</th><th></th></tr></thead><tbody>
+          ${stats.map((x) => { const a = (tr.arms || {})[x.id] || {}, t2 = a.train || {}, t3 = a.test || {}; const n = (t2.n || 0) + (t3.n || 0), e = (t2.expected || 0) + (t3.expected || 0);
+            return html`<tr key=${x.id} className=${ch && ch.arm === x.id ? "hl" : ""}><td>${x.label}</td><td className="mono">${x.btW}/${x.btN}</td><td className="mono">${n ? fr(e, 1) : "—"}</td><td className="mono">${t2.avgLegs ? fr(t2.avgLegs, 1) : "—"}</td><td className="mono">${x.lvN ? `${x.lvW}/${x.lvN}` : "—"}</td><td className="mono">${pct(x.mean, 1)}</td><td>${ch && ch.arm === x.id ? html`<${Pill} tone="accent">jouée cette semaine<//>` : ""}</td></tr>`; })}
+        </tbody></table><//></div>`; })}
+      <p className="tiny muted mt-1">« Attendu » : nombre de tickets gagnants prévu par les probabilités ; un écart durable entre attendu et réel signale des probabilités à corriger. Taux attendu = loi Bêta (semaines rejouées comptées à moitié, semaines réelles en entier).</p>
+      <div className="eyebrow mt-3">Audit des semaines terminées</div>
+      ${!log.length ? html`<${Empty} icon="ClipboardCheck">Le premier audit sera écrit quand tous les tickets de la semaine en cours seront réglés (lundi).<//>` :
+      html`<${TableWrap}><table className="tbl tiny"><thead><tr><th>Semaine</th>${scs.map((sc) => html`<th key=${sc.id}>${sc.label}</th>`)}<th>Choix du modèle</th><th>Log loss nous / marché</th><th>CLV</th></tr></thead><tbody>
+        ${log.map((e) => html`<tr key=${e.week}><td className="mono">${dFR(e.week)}</td>
+          ${scs.map((sc) => { const x = e.scen && e.scen[sc.id]; const sh = x && x.shown; return html`<td key=${sc.id}>${sh ? html`<${Pill} tone=${stTone(sh.status)}>${sh.status}<//> <span className="muted">${sh.lost ? `${sh.lost} perdue(s)/${sh.legs}` : `${sh.legs} sél.`}</span>` : "—"}</td>`; })}
+          <td className="mono">${e.picks ? `${e.picks.won}/${e.picks.n} (att. ${fr(e.picks.expected, 1)})` : "—"}</td>
+          <td className="mono">${e.ll ? `${fr(e.ll.ours, 3)} / ${fr(e.ll.market, 3)}` : "—"}</td>
+          <td className="mono">${e.clv ? sgn(100 * e.clv.ev, 1) + " %" : "—"}</td></tr>`)}
+      </tbody></table><//>`}
+    <//>`;
+  }
+
   function Performance({ ctx }) {
     const { state, acct, settings } = ctx;
     const [hq, setHq] = useState(""); const [hComp, setHComp] = useState("ALL"); const [hMarket, setHMarket] = useState("ALL"); const [hStatus, setHStatus] = useState("ALL");
@@ -1739,6 +1768,7 @@ window.__fqStartApp = function () {
     }
 
     return html`<div className="stack">
+      <${LearningCard} ctx=${ctx} />
       <${ClvCard} ctx=${ctx} />
       <div className="stats">
         <${Stat} label="Capital (unités)" value=${eur(acct.bankroll, settings.currency)} sub=${`capital ${eur(acct.initial, settings.currency)} · cash ${eur(acct.cash, settings.currency)}`} />
@@ -1846,11 +1876,11 @@ window.__fqStartApp = function () {
           <div className="muted tiny mt-1">« Pas de veto » : pertes non démontrées statistiquement (forte variance des grosses cotes), pas un feu vert. Opportunités que le modèle seul jugeait favorables, récompense réelle observée au résultat (cote − 1 si gagné, −1 si perdu). L'agent refuse un état quand la borne haute de son gain moyen est négative.</div></div>
       </div>
       ${TK && TK.scenarios && html`<div className="mt-3"><div className="eyebrow">Tickets de la semaine rejoués sur l'historique (1 u par ticket, cotes réelles d'avant-match)</div>
-        <${TableWrap}><table className="tbl small"><thead><tr><th>Niveau</th><th>Règle retenue</th><th>Tickets appr.</th><th>Gagnés</th><th>Cote moy.</th><th>Sélections moy.</th><th>ROI appr.</th><th>Tickets test</th><th>Gagnés</th><th>ROI test</th></tr></thead>
-          <tbody>${TK.scenarios.map((x) => { const a = x.chosen.train, b = x.chosen.test; return html`<tr key=${x.id}><td>${x.label}</td><td>${x.rule === "accord" ? "modèle et marché d'accord" : "marché seul"}</td>
+        <${TableWrap}><table className="tbl small"><thead><tr><th>Niveau</th><th>Stratégie de départ</th><th>Tickets appr.</th><th>Gagnés</th><th>Cote moy.</th><th>Sélections moy.</th><th>ROI appr.</th><th>Tickets test</th><th>Gagnés</th><th>ROI test</th></tr></thead>
+          <tbody>${TK.scenarios.filter((x) => x.arms && x.arms[x.start]).map((x) => { const a = x.arms[x.start].train, b = x.arms[x.start].test; return html`<tr key=${x.id}><td>${x.label}</td><td>${(FQ.P.TICKET_ARMS.find((y) => y.id === x.start) || {}).label || x.start}</td>
             <td className="mono">${a.n}</td><td className="mono">${a.won}</td><td className="mono">${fr(a.avgOdds, 1)}</td><td className="mono">${fr(a.avgLegs, 1)}</td><td className=${"mono " + (a.roi > 0 ? "t-pos" : "t-neg")}>${a.roi === null ? "—" : sgn(100 * a.roi, 0) + " %"}</td>
             <td className="mono">${b.n}</td><td className="mono">${b.won}</td><td className=${"mono " + (b.roi > 0 ? "t-pos" : "t-neg")}>${b.roi === null ? "—" : sgn(100 * b.roi, 0) + " %"}</td></tr>`; })}</tbody></table><//>
-        <div className="muted tiny mt-1">${TK.note} Échantillons très petits (une quarantaine de semaines) : un ticket gagné de plus ou de moins change le rendement de dizaines de points. À cote fixée, la chance de passer est maximale avec le moins de sélections possible, car chaque sélection ajoute la marge du bookmaker : c'est pourquoi les tickets comptent souvent 2 ou 3 sélections.</div></div>`}
+        <div className="muted tiny mt-1">${TK.note} Échantillons très petits (une quarantaine de semaines) : un ticket gagné de plus ou de moins change le rendement de dizaines de points. Toutes les stratégies et leur suivi réel : carte « Apprentissage continu » ci-dessus.</div></div>`}
     <//>`;
   }
 
@@ -1948,8 +1978,9 @@ window.__fqStartApp = function () {
       <div className="row justify-between items-center"><h3>Paramètres (${ctx.mode === "demo" ? "démo" : "réel"})</h3><button className="iconbtn" onClick=${onClose} aria-label="Fermer"><${Ic} n="X" /></button></div>
       <p className="muted small">Garde-fous initiaux prudents, modifiables. Ce ne sont pas des seuils universellement optimaux.</p>
       <div className="filters">
-        <${Field} label="Bookmaker de référence" id="s-book" hint="cotes utilisées pour les choix et les tickets ; s'il n'a pas coté un match : médiane des bookmakers français, puis Bet 365"><select id="s-book" className="inp" value=${s.oddsBook || "winamax_fr"} onChange=${(e) => setS({ ...s, oddsBook: e.target.value })}>
+        <${Field} label="Bookmaker de référence" id="s-book" hint="cotes utilisées pour les choix et les tickets ; s'il n'a pas coté un match : médiane des bookmakers français, puis Bet 365"><select id="s-book" className="inp" value=${s.oddsBook || "betclic_fr"} onChange=${(e) => setS({ ...s, oddsBook: e.target.value, oddsBookUser: true })}>
           ${Object.entries((FQ.ETL && FQ.ETL.FR_BOOKS) || {}).map(([k, v]) => html`<option key=${k} value=${k}>${v}</option>`)}</select><//>
+        <${Field} label="Multiboost Betclic" id="s-mb" hint="bonus de cote des combinés à partir de 5 sélections, appliqué si le bookmaker de référence est Betclic"><select id="s-mb" className="inp" value=${s.multiboost === false ? "off" : "on"} onChange=${(e) => setS({ ...s, multiboost: e.target.value === "on" })}><option value="on">Appliqué</option><option value="off">Ignoré</option></select><//>
         ${F("initialBankroll", "Capital de référence (unités)", "aucune bankroll réelle : 100 u par défaut", 1)}
         ${F("kellyFraction", "Kelly fractionné (%)", "25 % par défaut", 100)}
         ${F("maxStakePct", "Mise maximale (% bankroll)", "1 % par défaut", 100)}

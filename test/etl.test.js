@@ -100,7 +100,7 @@ test("The Odds API : rattachement au bon match malgré des noms différents", ()
   const got = M2.find((m) => m.id === target.id);
   assert.ok(got.oddsFr, "relevé rattaché");
   assert.equal(got.oddsFr.books.winamax_fr[0], 2.05);
-  assert.equal(M2.filter((m) => m.oddsFr).length, 1, "rattaché à un seul match");
+  assert.equal(M2.filter((m) => m.oddsFr && m.oddsFr.eventId === "evX").length, 1, "rattaché à un seul match");
 });
 
 test("reconstruction déterministe : identifiants uniques, aucune date invalide", () => {

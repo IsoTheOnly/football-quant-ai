@@ -138,7 +138,9 @@ ingest.inbox = inboxIds.length;
 // 2. football-data.co.uk (cotes d'avant-match et de clôture)
 {
   const got = {};
-  for (const key of E.fdFilesFor(today)) {
+  // saisons passées déjà stockées mais sans cotes ±2,5 (format antérieur) : retéléchargées une fois
+  const older = Object.entries(raw.fd || {}).filter(([k, rows]) => /^mmz4281\//.test(k) && rows.length && !rows.some((r) => r[12])).map(([k]) => k);
+  for (const key of [...new Set(E.fdFilesFor(today).concat(older))]) {
     net.fd.tried++;
     const r = get(E.fdUrl(key));
     if (r.ok && /^﻿?Div,|^﻿?Country,|HomeTeam|Home,/.test(String(r.body).slice(0, 300))) { got[key] = r.body; net.fd.ok++; }
@@ -157,7 +159,7 @@ function oddsPlan(M) {
   const dim = new Date(Date.UTC(+today.slice(0, 4), +today.slice(5, 7), 0)).getUTCDate(), daysLeft = dim - +today.slice(8, 10) + 1;
   const dow = new Date(today + "T12:00:00Z").getUTCDay(); // 0 dimanche … 4 jeudi
   const weight = dow === 4 || dow === 5 || dow === 6 ? 1.6 : 0.7; // davantage de relevés pendant la fenêtre des tickets
-  const budget = Math.max(0, Math.min(13, Math.floor((rem / (daysLeft * 2)) * weight)));
+  const budget = Math.max(0, Math.min(40, Math.floor((rem / (daysLeft * 2)) * weight)));
   const noFr = feed.noFr || {};
   const horizon = U.addDays(today, 3), soon = new Map();
   for (const m of M) {
@@ -168,7 +170,7 @@ function oddsPlan(M) {
     const cur = soon.get(m.comp); soon.set(m.comp, { comp: m.comp, first: Math.min(cur ? cur.first : Infinity, ko), n: (cur ? cur.n : 0) + 1 });
   }
   const comps = [...soon.values()].sort((a, b) => a.first - b.first || b.n - a.n).map((x) => x.comp);
-  return { comps: comps.slice(0, budget), budget, remaining: rem, eligible: comps.length };
+  return { comps: comps.slice(0, Math.min(13, budget)), budget, remaining: rem, eligible: comps.length };
 }
 const oddsInfo = { enabled: !!ODDS_KEY };
 if (ODDS_KEY && process.argv.includes("--no-odds")) { oddsInfo.skipped = true; notes.push("relevé des cotes françaises sauté pour ce passage (relevé récent conservé)"); }
@@ -193,6 +195,23 @@ else if (ODDS_KEY) {
     net.odds.ok++; oddsInfo.kept += res.kept;
     if (Array.isArray(events) && events.length && !res.kept && !res.live) feed.noFr[comp] = today; else delete feed.noFr[comp];
     if (res.rejected) notes.push(`The Odds API ${comp} : ${res.rejected} cote(s) écartée(s) (marge invraisemblable)`);
+  }
+  // marchés complémentaires (les deux équipes marquent, ±2,5 buts) des matchs à venir sous 4 jours, 2 crédits par match,
+  // avec le reste du budget de ce passage ; priorité aux matchs les plus proches, un relevé par match toutes les 20 h au plus
+  {
+    const left = Math.max(0, op.budget - net.odds.tried);
+    const lim = Date.now() + 4 * 864e5, recent = Date.now() - 20 * 3600e3;
+    const evs = Object.entries(raw.oddsFr || {}).filter(([id, o]) => Date.parse(o[1]) > Date.now() && Date.parse(o[1]) < lim && E.ODDS_API_SPORTS[o[0]]
+      && !(raw.oddsFrX && raw.oddsFrX[id] && Date.parse(raw.oddsFrX[id].at) > recent)).sort((a, b) => (a[1][1] < b[1][1] ? -1 : 1)).slice(0, Math.floor(left / 2));
+    oddsInfo.events = { planned: evs.length, kept: 0 };
+    for (const [id, o] of evs) {
+      if (feed.remaining !== undefined && feed.remaining <= 2) break;
+      const r = get(E.oddsApiEventUrl(o[0], id, ODDS_KEY));
+      const rem = parseInt(r.headers && r.headers["x-requests-remaining"], 10);
+      if (Number.isFinite(rem)) { feed.remaining = rem; feed.at = fetchedAt; net.odds.credits = rem; }
+      if (!r.ok) { if (r.status === 401 || r.status === 429 || !r.status) break; continue; }
+      try { oddsInfo.events.kept += E.mergeOddsApiEvent(raw, o[0], JSON.parse(r.body), fetchedAt).kept; } catch (e) {}
+    }
   }
   raw.feeds.oddsFrFeed = { fetchedAt, source: "The Odds API (bookmakers français)" };
 } else notes.push("ODDS_API_KEY absent : cotes Bet 365 seulement");

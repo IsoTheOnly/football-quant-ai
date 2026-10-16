@@ -14,6 +14,7 @@
   "use strict";
   const FQ = root.FQ;
   const T = (FQ.T = {});
+  const U2 = FQ.util;
   const sum = (a) => a.reduce((x, y) => x + y, 0);
   const mean = (a, f) => (a.length ? sum(a.map(f)) / a.length : null);
 
@@ -38,7 +39,8 @@
         const c = m.close && m.close.h ? [m.close.h, m.close.d, m.close.a] : null;
         rows.push({ id: m.id, comp, date: d, home: m.home, away: m.away, p3: [pr.markets.p1, pr.markets.pN, pr.markets.p2], pB: pr.markets.bttsYes,
           k: m.hg > m.ag ? 0 : m.hg === m.ag ? 1 : 2, bt: m.hg > 0 && m.ag > 0 ? 1 : 0, rel: FQ.reliability(model, m, {}).score, o, c,
-          oIsClose: !!(m.odds && /clôture/.test(m.odds.src || "")), lh: pr.lambdaHome, la: pr.lambdaAway });
+          oIsClose: !!(m.odds && /clôture/.test(m.odds.src || "")), lh: pr.lambdaHome, la: pr.lambdaAway,
+          pO: U2.isNum(pr.markets.over25) ? pr.markets.over25 : null, ou: m.ou25 ? [m.ou25.o, m.ou25.u] : null, t: m.hg + m.ag > 2 ? 1 : 0 });
       }
     }
     return rows;
@@ -136,6 +138,64 @@
   }
   T.ticketBacktest = ticketBacktest;
 
+  /**
+   * Rapport moyen cote française / cote Bet 365 sur les mêmes rencontres (issue favorite), mesuré sur les relevés disponibles.
+   * Sert à rejouer l'historique aux prix que l'on obtient réellement en France. 0,96 par défaut faute de relevés.
+   */
+  function frOddsFactor(matches) {
+    const r = [];
+    for (const m of matches) {
+      if (!m.oddsFr || !m.oddsFr.books || !m.odds || !m.odds.h || !/Bet 365/.test(m.odds.src || "")) continue;
+      const b = m.oddsFr.books.winamax_fr || Object.values(m.oddsFr.books)[0]; if (!b) continue;
+      const t = [m.odds.h, m.odds.d, m.odds.a], i = t.indexOf(Math.min(...t));
+      r.push(b[i] / t[i]);
+    }
+    if (r.length < 20) return { factor: 0.96, n: r.length, note: "valeur par défaut (moins de 20 relevés comparables)" };
+    r.sort((a, b) => a - b);
+    return { factor: Math.round(r[Math.floor(r.length / 2)] * 1000) / 1000, n: r.length, note: "médiane Winamax / Bet 365 sur l'issue favorite" };
+  }
+  T.frOddsFactor = frOddsFactor;
+  /**
+   * Rejeu d'une stratégie de ticket : chaque semaine (jeudi → dimanche), candidats = issue la plus probable de chaque match
+   * (probabilité ≥ arm.pMin), cote d'avant-match × facteur français ; ticket = plus forte chance de gain dans la fourchette de cote.
+   * arm null : ancienne règle (toutes issues, sans exigence de favori), pour comparaison.
+   */
+  function armBacktest(rows, sc, arm, frF, s) {
+    const f = (frF && frF.factor) || 1, W = s.ticketFromDow || 4;
+    const bt = s.multiboost === false ? null : FQ.P.boostTable({ realBets: [] });
+    const boost = bt ? (n) => FQ.P.boostFor(bt, n) : null;
+    const blocks = new Map();
+    for (const r of rows) {
+      if (!r.o || r.oIsClose || r.rel < s.relMin || FQ.util.isoDow(r.date) < W) continue;
+      const b = FQ.util.weekMonday(r.date); (blocks.get(b) || blocks.set(b, []).get(b)).push(r);
+    }
+    let n = 0, won = 0, profit = 0, sOdds = 0, sLegs = 0, sP = 0; const weeks = []; const mix = {};
+    for (const b of [...blocks.keys()].sort()) {
+      const cands = [];
+      for (const r of blocks.get(b)) {
+        const top = r.p3.indexOf(Math.max(...r.p3));
+        const o = r.o.map((x) => Math.round(x * f * 100) / 100);
+        const dc = FQ.P.dcOdds({ h: o[0], d: o[1], a: o[2] }, 1);
+        const sels = [["1N2", "1", r.p3[0], o[0], r.k === 0], ["1N2", "N", r.p3[1], o[1], r.k === 1], ["1N2", "2", r.p3[2], o[2], r.k === 2],
+          ["DC", "1N", r.p3[0] + r.p3[1], dc["1N"], r.k !== 2], ["DC", "12", r.p3[0] + r.p3[2], dc["12"], r.k !== 1], ["DC", "N2", r.p3[1] + r.p3[2], dc.N2, r.k !== 0]];
+        if (r.ou && U2.isNum(r.pO)) { const ou = r.ou.map((x) => Math.round(x * f * 100) / 100); sels.push(["Buts", "+2.5", r.pO, ou[0], r.t === 1], ["Buts", "-2.5", 1 - r.pO, ou[1], r.t === 0]); }
+        for (const [market, sel, p, odds, w] of sels) {
+          const c = { matchId: r.id, date: r.date, market, sel, p, odds, won: w, top: market === "1N2" && { 1: 0, N: 1, 2: 2 }[sel] === top };
+          if (arm ? FQ.P.armAllows(arm, c) : market === "1N2") cands.push(c);
+        }
+      }
+      const tk = FQ.P.buildTicket(cands, sc, { boost, pool: 90, beam: 120 });
+      if (!tk) continue;
+      const ok = tk.legs.every((l) => l.won);
+      n++; if (ok) won++; profit += ok ? tk.totalOdds - 1 : -1;
+      sOdds += tk.totalOdds; sLegs += tk.legs.length; sP += tk.pJoint;
+      tk.legs.forEach((l) => (mix[l.market] = (mix[l.market] || 0) + 1));
+      weeks.push([b, ok ? 1 : 0, tk.legs.length, Math.round(tk.pJoint * 1000) / 1000]);
+    }
+    return { n, won, hit: n ? won / n : null, expected: sP, profit, roi: n ? profit / n : null, avgOdds: n ? sOdds / n : null, avgLegs: n ? sLegs / n : null, avgP: n ? sP / n : null, mix, weeks };
+  }
+  T.armBacktest = armBacktest;
+
   /** Choix préférentiel évalué : taux de réussite et rendement d'une mise unitaire au prix du marché */
   function evalPicks(rows, s, T1, TB) {
     const res = { n: 0, hit: 0, value: { n: 0, hit: 0, staked: 0, profit: 0 }, proba: { n: 0, hit: 0, withOdds: 0, profit: 0 }, byMarket: {} };
@@ -222,16 +282,48 @@
     const trainC = calRows(train), testC = calRows(test);
     out.calibBins = { train1N2: FQ.calibrationBins(trainC.flatMap((r) => r.p3.map((p, i) => [p, r.k === i ? 1 : 0])), 10), test1N2: FQ.calibrationBins(testC.flatMap((r) => r.p3.map((p, i) => [p, r.k === i ? 1 : 0])), 10),
       testBTTS: FQ.calibrationBins(testC.map((r) => [r.pB, r.bt]), 10) };
-    // mélange modèle / marché : poids w appris sur l'apprentissage (log loss 1N2), vérifié sur le test
+    // mélange modèle / marché
+    // 1. méthode de retrait de la marge (normalisation ou puissance), choisie sur l'apprentissage, gardée si le test confirme
     const oddsOf = (r) => r.o || r.c;
-    const llBlend = (rows, w) => mean(rows.filter(oddsOf), (r) => FQ.metrics.logLoss3(FQ.blend(r.p3, oddsOf(r), w).p3, r.k));
-    let bw = 1, bl = Infinity;
-    for (let w = 0; w <= 1.0001; w += 0.05) { const l = llBlend(trainC, w); if (l < bl) { bl = l; bw = Math.round(w * 100) / 100; } }
-    out.blend = { w: bw, trainLL: bl, trainModelLL: llBlend(trainC, 1), trainMarketLL: llBlend(trainC, 0), testLL: llBlend(testC, bw), testModelLL: llBlend(testC, 1), testMarketLL: llBlend(testC, 0) };
+    const llMkt = (rows, m) => mean(rows.filter(oddsOf), (r) => FQ.metrics.logLoss3(FQ.marketProbs(oddsOf(r), m), r.k));
+    const dv = { trainNorm: llMkt(trainC, "norm"), trainPower: llMkt(trainC, "power"), testNorm: llMkt(testC, "norm"), testPower: llMkt(testC, "power") };
+    dv.method = dv.trainPower < dv.trainNorm && (dv.testPower === null || dv.testPower <= dv.testNorm) ? "power" : "norm";
+    o.onLog(`Marge : normalisation ${dv.trainNorm.toFixed(4)} / puissance ${dv.trainPower.toFixed(4)} (apprentissage) ; test ${dv.testNorm.toFixed(4)} / ${dv.testPower.toFixed(4)} → ${dv.method}`);
+    const M = dv.method;
+    // 2. poids global w (log loss 1N2), vérifié sur le test
+    const llBlend = (rows, w) => mean(rows.filter(oddsOf), (r) => FQ.metrics.logLoss3(FQ.blend(r.p3, oddsOf(r), w, M).p3, r.k));
+    const bestW = (rows) => { let bw = 1, bl = Infinity; for (let w = 0; w <= 1.0001; w += 0.05) { const l = llBlend(rows, w); if (l < bl) { bl = l; bw = Math.round(w * 100) / 100; } } return { w: bw, ll: bl }; };
+    const g = bestW(trainC);
+    out.blend = { w: g.w, devig: M, devigDetail: dv, trainLL: g.ll, trainModelLL: llBlend(trainC, 1), trainMarketLL: llBlend(trainC, 0), testLL: llBlend(testC, g.w), testModelLL: llBlend(testC, 1), testMarketLL: llBlend(testC, 0) };
     out.blend.accepted = out.blend.testLL <= out.blend.testModelLL;
-    const W = out.blend.accepted ? bw : 1;
-    const blendRows = (rows) => rows.map((r) => (oddsOf(r) ? Object.assign({}, r, { p3: FQ.blend(r.p3, oddsOf(r), W).p3 }) : r));
+    const W = out.blend.accepted ? g.w : 1;
+    // 3. poids par compétition : retenu seulement s'il bat le poids global sur le test de la compétition (au moins 40 matchs cotés)
+    out.blend.byComp = {}; out.blend.compDetail = {};
+    for (const comp of Object.keys(out.leagues)) {
+      const tr = trainC.filter((r) => r.comp === comp && oddsOf(r)), te = testC.filter((r) => r.comp === comp && oddsOf(r));
+      if (tr.length < 80) continue;
+      const c = bestW(tr), llT = te.length ? llBlend(te, c.w) : null, llG = te.length ? llBlend(te, W) : null;
+      const ok = c.w !== W && te.length >= 40 && llT < llG;
+      out.blend.compDetail[comp] = { w: c.w, nTrain: tr.length, nTest: te.length, testLL: llT, testLLGlobal: llG, accepted: ok };
+      if (ok) out.blend.byComp[comp] = c.w;
+    }
+    o.onLog(`Mélange : w global ${W} (${M}) ; par compétition ${JSON.stringify(out.blend.byComp)}`);
+    // marchés de buts : poids modèle / marché appris sur les cotes historiques plus/moins de 2,5 (football-data), vérifié sur le test
+    {
+      const ouRows = (rows) => rows.filter((r) => r.ou && U2.isNum(r.pO));
+      const two = (o) => (1 / o[0]) / (1 / o[0] + 1 / o[1]);
+      const llG = (rows, w) => mean(ouRows(rows), (r) => FQ.metrics.logLossBinary(w * r.pO + (1 - w) * two(r.ou), r.t));
+      let gw = 1, gl = Infinity; for (let w = 0; w <= 1.0001; w += 0.05) { const l = llG(train, w); if (l < gl) { gl = l; gw = Math.round(w * 100) / 100; } }
+      out.blendGoals = { w: gw, n: ouRows(train).length, trainLL: gl, trainModelLL: llG(train, 1), trainMarketLL: llG(train, 0), testLL: llG(test, gw), testModelLL: llG(test, 1), testMarketLL: llG(test, 0) };
+      out.blendGoals.accepted = ouRows(test).length >= 50 && out.blendGoals.testLL <= out.blendGoals.testModelLL;
+      o.onLog(`Buts ±2,5 : w ${gw} ; test modèle ${out.blendGoals.testModelLL && out.blendGoals.testModelLL.toFixed(4)} / marché ${out.blendGoals.testMarketLL && out.blendGoals.testMarketLL.toFixed(4)} / retenu ${out.blendGoals.testLL && out.blendGoals.testLL.toFixed(4)}`);
+    }
+    const wOf = (comp) => (out.blend.byComp[comp] !== undefined ? out.blend.byComp[comp] : W);
+    const gW = out.blendGoals && out.blendGoals.accepted ? out.blendGoals.w : 1;
+    const blendRows = (rows) => rows.map((r) => Object.assign({}, r, oddsOf(r) ? { p3: FQ.blend(r.p3, oddsOf(r), wOf(r.comp), M).p3 } : {},
+      r.ou && U2.isNum(r.pO) ? { pO: gW * r.pO + (1 - gW) * ((1 / r.ou[0]) / (1 / r.ou[0] + 1 / r.ou[1])) } : {}));
     const trainB = blendRows(trainC), testB = blendRows(testC);
+    out.summary0 = { trainLLFinal: mean(trainB.filter(oddsOf), (r) => FQ.metrics.logLoss3(r.p3, r.k)), testLLFinal: mean(testB.filter(oddsOf), (r) => FQ.metrics.logLoss3(r.p3, r.k)) };
     // politique : seuil d'EV et cote maximale choisis sur l'apprentissage
     const cands = [];
     for (const ev of [0.02, 0.04, 0.06, 0.1]) for (const mo of [2.5, 4, 1000]) {
@@ -256,18 +348,23 @@
     // choix préférentiel (probabilités finales : calibrées puis mélangées au marché quand une cote existe)
     const sp = Object.assign({}, s, { evMin: chosen.evMin, maxOdds: chosen.maxOdds, relMin: s.relMin });
     out.picks = { train: evalPicks(trainB, sp, 1, 1), test: evalPicks(testB, sp, 1, 1) };
-    // tickets combinés : 3 scénarios ; règle de sélection (marché seul / accord modèle-marché) choisie sur l'apprentissage
+    // tickets combinés : stratégies « favoris » (issue la plus probable de chaque match) rejouées semaine par semaine
     if (FQ.P && FQ.P.buildTicket) {
-      const strip2 = (x) => Object.assign({}, x, { curve: undefined });
-      out.tickets = { window: "jeudi → dimanche, un jeu par semaine", stake: 1, scenarios: FQ.P.scenarios(s).map((sc) => {
-        const v = {};
-        for (const [rule, ag] of [["marché", false], ["accord", true]]) v[rule] = { train: ticketBacktest(trainB, trainC, sc, s.relMin, ag, s.ticketFromDow || 4), test: ticketBacktest(testB, testC, sc, s.relMin, ag, s.ticketFromDow || 4) };
-        const okA = v.accord.train.n >= 15 && v["marché"].train.n >= 15 && (v.accord.train.roi ?? -9) > (v["marché"].train.roi ?? -9);
-        const rule = okA ? "accord" : "marché";
-        o.onLog(`Tickets ${sc.label} : règle ${rule} ; test ${v[rule].test.n} tickets, ${v[rule].test.won} gagnés, ROI ${v[rule].test.roi === null ? "—" : (100 * v[rule].test.roi).toFixed(1) + " %"}`);
-        return { id: sc.id, label: sc.label, lo: sc.lo, hi: sc.hi, rule, chosen: { train: strip2(v[rule].train), test: v[rule].test },
-          variants: { "marché": { train: strip2(v["marché"].train), test: strip2(v["marché"].test) }, accord: { train: strip2(v.accord.train), test: strip2(v.accord.test) } } };
-      }), note: "Un ticket par scénario et par semaine (matchs du jeudi au dimanche), cotes d'avant-match football-data.co.uk (Bet365 ou moyenne), mise 1 u. Règle choisie sur l'apprentissage, résultat du test mesuré ensuite." };
+      const frF = frOddsFactor(matches);
+      const strip2 = (x) => Object.assign({}, x, { weeks: undefined });
+      out.tickets = { window: "jeudi → dimanche, un jeu par semaine", stake: 1, frFactor: frF, scenarios: FQ.P.scenarios(s).map((sc) => {
+        const arms = {};
+        for (const arm of FQ.P.TICKET_ARMS) arms[arm.id] = { train: armBacktest(trainB, sc, arm, frF, s), test: armBacktest(testB, sc, arm, frF, s) };
+        const bench = { train: armBacktest(trainB, sc, null, frF, s), test: armBacktest(testB, sc, null, frF, s) };
+        // stratégie de départ : meilleur taux de réussite sur l'apprentissage (à égalité : plus forte chance estimée)
+        const ranked = FQ.P.TICKET_ARMS.map((a) => a.id).filter((id) => arms[id].train.n >= 10)
+          .sort((a, b) => (arms[b].train.hit - arms[a].train.hit) || (arms[b].train.avgP - arms[a].train.avgP));
+        const start = ranked[0] || FQ.P.TICKET_ARMS[0].id;
+        o.onLog(`Tickets ${sc.label} : ${FQ.P.TICKET_ARMS.map((a) => `${a.id} ${arms[a.id].train.won}/${arms[a.id].train.n} (test ${arms[a.id].test.won}/${arms[a.id].test.n})`).join(" · ")} ; ancienne règle ${bench.train.won}/${bench.train.n} → ${start}`);
+        return { id: sc.id, label: sc.label, lo: sc.lo, hi: sc.hi, start,
+          arms: Object.fromEntries(Object.entries(arms).map(([k, v]) => [k, { train: strip2(v.train), test: strip2(v.test), weeks: v.train.weeks.concat(v.test.weeks) }])),
+          benchmark: { train: strip2(bench.train), test: strip2(bench.test) } };
+      }), note: "Un ticket par stratégie, par niveau et par semaine (matchs du jeudi au dimanche). Cotes d'avant-match football-data.co.uk (1N2, ±2,5 buts) ramenées au niveau des bookmakers français (facteur mesuré), double chance déduite du 1N2, Multiboost Betclic appliqué, mise 1 u. « Les deux équipes marquent » n'a pas d'historique de cotes : ce marché n'entre qu'en réel." };
     }
     // agent : Q(s, PRENDRE) sur toutes les opportunités tarifées
     let q = {};

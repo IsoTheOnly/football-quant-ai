@@ -61,10 +61,9 @@ test("la page se charge, affiche les 4 onglets et le formulaire « Mon ticket »
   assert.ok(d.querySelector(".tabs svg"), "icônes absentes (lucide-react non chargé)");
   assert.ok(tabs, "onglets absents ; erreurs : " + errors.slice(0, 3).join(" | "));
   assert.deepEqual([...tabs].map((b) => b.textContent.trim()), ["Tableau de bord", "Pronostics & tickets", "Mes paris & audit", "Performance"]);
-  // mode réel (données embarquées)
-  const realBtn = [...d.querySelectorAll(".mode-switch button")].find((b) => b.textContent.trim() === "Réel");
-  realBtn.click();
-  assert.ok(await until(() => realBtn.classList.contains("on") && !d.querySelector(".banner.demo"), 60000), "bascule en mode réel impossible");
+  // une seule base, réelle : plus de bascule démo
+  assert.equal(d.querySelector(".mode-switch"), null, "la bascule Démo/Réel doit avoir disparu");
+  assert.equal(d.querySelector(".banner.demo"), null);
   // bouton « Mon ticket » visible dans la barre du haut → formulaire de saisie avec recherche de match
   const btn = [...d.querySelectorAll(".topbar button")].find((b) => /Mon ticket/.test(b.textContent));
   assert.ok(btn, "bouton « Mon ticket » absent de la barre du haut");

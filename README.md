@@ -15,7 +15,6 @@ L'application est une page HTML autonome (React via CDN + `htm`, sans compilatio
 | `src/etl2.js` | ETL v2 (Node + navigateur) : ESPN, football-data.co.uk |
 | `src/train2.js` | Entraînement sur ≥ 12 mois d'historique, sans fuite de données |
 | `src/runner.js` | Exécuteur Node de la tâche planifiée (`run` / `summary`) |
-| `src/demo.js` | Jeu de démonstration fictif (graine fixe) |
 | `src/app.js` | Interface React |
 | `src/boot.js`, `src/trained-loader.js`, `src/tailwind-config.js` | Amorçage de la page |
 | `src/styles.css`, `src/template.html` | Styles et gabarit de la page |
@@ -60,13 +59,30 @@ Si ESPN est injoignable, `run` sort avec le code 3 et écrit `fetch_plan.json` ;
 
 ## Cotes
 
-Une cote affichée ou jouée vient toujours d'un bookmaker, jamais d'un calcul :
+1N2 : cote relevée chez un bookmaker, jamais calculée :
 
-1. bookmaker français de référence (Paramètres, Winamax par défaut) ;
+1. bookmaker français de référence (Paramètres, Betclic par défaut) ;
 2. sinon médiane des bookmakers français relevés pour le match ;
 3. sinon Bet 365 (crédits The Odds API épuisés pour le mois, ou compétition non couverte).
 
-Les crédits (500 par mois, offre gratuite) sont répartis sur le mois, davantage du jeudi au samedi pour les tickets. « Les deux équipes marquent » et les buteurs n'ont pas de cote française accessible : ils restent en pronostic, sans cote ni pari. Le « seuil 1/p » est la cote minimale à exiger selon le modèle, pas une cote de bookmaker.
+Autres marchés des combinés :
+
+| Marché | Cote |
+|---|---|
+| Les deux équipes marquent, ±2,5 buts | relevée match par match (The Odds API, NetBet / PMU), 2 crédits par match |
+| Double chance | **estimée** d'après le 1N2 réel du même bookmaker (1 / (1/c₁ + 1/c₂)), corrigée par les cotes réelles saisies dans « Mon ticket » ; marquée d'un astérisque |
+| Buteur, joueur décisif | aucune cote française accessible : pronostic seul |
+
+Multiboost Betclic : bonus de cote totale selon le nombre de sélections, barème de départ relevé sur des tickets réels (8 → +4,7 %, 10 → +6,2 %, 13 → +7,7 %), remplacé par les bonus observés sur les tickets Betclic saisis.
+
+Les crédits (500 par mois, offre gratuite) sont répartis sur le mois, davantage du jeudi au samedi pour les tickets. Le « seuil 1/p » est la cote minimale à exiger selon le modèle, pas une cote de bookmaker.
+
+## Probabilités et apprentissage
+
+- Marge retirée par la méthode de la puissance (corrige le biais favori-outsider), choisie sur la log loss ; poids modèle / marché par compétition, gardé seulement s'il améliore la période de test.
+- Tickets : sept stratégies (favoris à 45 / 55 / 65 %, 1N2 chance max avec ou sans nul, combiné sécurisé multi-marchés ≥ 70 %, multi-marchés ≥ 50 %), rejouées sur l'historique puis suivies chaque semaine en « fantôme ». La stratégie jouée est celle dont le taux de réussite attendu (loi Bêta : semaines rejouées à demi-poids, semaines réelles en entier) est le plus élevé.
+- Audit de chaque semaine terminée : tickets, choix du modèle (réel vs attendu), log loss face au marché, CLV.
+- Réentraînement complet chaque semaine par la tâche planifiée.
 
 ## Cote de clôture (CLV)
 

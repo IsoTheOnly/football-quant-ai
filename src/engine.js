@@ -97,7 +97,7 @@
             neutral: x.neutral !== undefined ? !!x.neutral : c.code === "WC" ? !/Mexico|Canada|United States|USA/.test(home) : false,
             regular: x.reg !== undefined ? !!x.reg : undefined,
             odds: x.odds || (x.oddsIsClose && x.close ? Object.assign({}, x.close, { src: x.close.src + " — utilisée faute de cote d'avant-match" }) : null),
-            close: x.close || null, closeRef: x.closeRef || null, oddsFr: x.oddsFr || null, xg: x.xg || null, aet: x.aet || null, ft: x.ft || null, eid: x.eid || null,
+            close: x.close || null, closeRef: x.closeRef || null, oddsFr: x.oddsFr || null, oddsFrX: x.oddsFrX || null, ou25: x.ou25 || null, xg: x.xg || null, aet: x.aet || null, ft: x.ft || null, eid: x.eid || null,
             source: src, sourceFile: s.file, sourceCommitDate: s.commitDate,
             webCheck: web,
           });
@@ -349,7 +349,9 @@
       scores.push({ h: i, a: j, p: v });
     }
     scores.sort((a, b) => b.p - a.p);
-    return { p1, pN, p2, bttsYes: btts, bttsNo: 1 - btts, topScores: scores.slice(0, 8), pHomeScores: 1 - sum(M.map((r) => r[0])) + 0, pAwayScores: 1 - sum(M[0]) };
+    let over25 = 0; for (let i = 0; i < M.length; i++) for (let j = 0; j < M[i].length; j++) if (i + j > 2) over25 += M[i][j];
+    over25 /= sum(M.map((r) => sum(r))) || 1;
+    return { p1, pN, p2, bttsYes: btts, bttsNo: 1 - btts, over25, topScores: scores.slice(0, 8), pHomeScores: 1 - sum(M.map((r) => r[0])) + 0, pAwayScores: 1 - sum(M[0]) };
   }
   FQ.marketsFromMatrix = marketsFromMatrix;
 
@@ -562,7 +564,9 @@
     horizonDays: 14,         // pronostics : toutes les rencontres programmées des 14 prochains jours
     ticketFromDow: 4,        // tickets de la semaine : construits à partir du jeudi, sur les matchs du jeudi au dimanche (cotes publiées 3 jours avant)
     paperTickets: true,      // paper betting des 3 tickets (unités fictives, 1 u par ticket)
-    oddsBook: "winamax_fr",  // bookmaker français de référence pour les cotes (The Odds API) ; repli : médiane des bookmakers FR, puis Bet 365
+    ticketPolicy: "auto",    // stratégies de ticket : "auto" (l'apprentissage choisit parmi toutes) ou "favoris" (issue la plus probable de chaque match seulement)
+    oddsBook: "betclic_fr",  // bookmaker français de référence pour les cotes (The Odds API) ; repli : médiane des bookmakers FR, puis Bet 365
+    multiboost: true,        // Multiboost Betclic : cote totale relevée selon le nombre de sélections (barème appris sur les tickets réels)
     ticketCfg: null,         // null = scénarios par défaut ; sinon [{ id, lo, hi, stake }]
   };
   FQ.DEFAULT_SETTINGS = DEFAULT_SETTINGS;
@@ -693,20 +697,35 @@
   }
   FQ.preferredPick = preferredPick;
 
-  /** Probabilités du marché sans marge (normalisation proportionnelle) */
-  function marketProbs(odds3) {
+  /**
+   * Probabilités du marché sans marge.
+   * - "norm" : normalisation proportionnelle (la marge est retirée à parts égales) ;
+   * - "power" : méthode de la puissance, p_i = (1/c_i)^k avec Σ p_i = 1. Elle retire davantage de marge sur les outsiders
+   *   que sur les favoris, ce qui corrige le biais favori-outsider (les bookmakers margent plus les grosses cotes).
+   * La méthode retenue est choisie sur l'historique (log loss), voir FQ.T.run.
+   */
+  function devigPower(odds3) {
+    const inv = odds3.map((c) => 1 / c);
+    let lo = 0.5, hi = 2;
+    for (let it = 0; it < 60; it++) { const k = (lo + hi) / 2; const s = sum(inv.map((x) => Math.pow(x, k))); if (s > 1) lo = k; else hi = k; }
+    const k = (lo + hi) / 2; const p = inv.map((x) => Math.pow(x, k)); const sm = sum(p);
+    return p.map((x) => x / sm);
+  }
+  FQ.devigPower = devigPower;
+  function marketProbs(odds3, method) {
     if (!odds3 || !odds3.every((c) => isNum(c) && c > 1)) return null;
+    if (method === "power") return devigPower(odds3);
     const inv = odds3.map((c) => 1 / c); const sm = sum(inv);
     return inv.map((x) => x / sm);
   }
   FQ.marketProbs = marketProbs;
-  /** Mélange modèle / marché : p = w·p_modèle + (1 − w)·p_marché (w appris sur l'historique) */
-  function blend(p3, odds3, w) {
-    const pm = marketProbs(odds3);
+  /** Mélange modèle / marché : p = w·p_modèle + (1 − w)·p_marché (w et méthode appris sur l'historique) */
+  function blend(p3, odds3, w, method) {
+    const pm = marketProbs(odds3, method);
     if (!pm || !isNum(w) || w >= 1) return { p3, used: false };
     const p = p3.map((x, i) => w * x + (1 - w) * pm[i]);
     const sm = sum(p);
-    return { p3: p.map((x) => x / sm), used: true, market: pm, w };
+    return { p3: p.map((x) => x / sm), used: true, market: pm, w, method: method || "norm" };
   }
   FQ.blend = blend;
 

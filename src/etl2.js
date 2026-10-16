@@ -83,8 +83,10 @@
       const close = tri(r, "B365C", "AvgC", "PSC", "MaxC");
       // référence de clôture pour la mesure CLV : Pinnacle (marché le plus efficient), sinon moyenne du marché
       const closeRef = tri(r, "PSC", "AvgC");
+      // plus/moins de 2,5 buts d'avant-match (Bet 365, sinon moyenne du marché)
+      const ou = (() => { for (const k of ["B365", "Avg", "P"]) { const o = num(r[k + ">2.5"]), u = num(r[k + "<2.5"]); if (o && u) return [o, u, k]; } return null; })();
       const xg = num(r.HxG) !== null || r.HxG === "0" ? [parseFloat(r.HxG), parseFloat(r.AxG)] : null;
-      out.push([div, date, r.Time || "", home, away, hg === "" || hg === undefined ? null : +hg, ag === "" || ag === undefined ? null : +ag, pre, close, xg, r.Season || null, closeRef]);
+      out.push([div, date, r.Time || "", home, away, hg === "" || hg === undefined ? null : +hg, ag === "" || ag === undefined ? null : +ag, pre, close, xg, r.Season || null, closeRef, ou]);
     }
     return out;
   }
@@ -202,6 +204,7 @@
         if (r[7]) ex.odds = { h: r[7][0], d: r[7][1], a: r[7][2], src: `football-data.co.uk (${r[7][3] === "B365" ? "Bet 365" : r[7][3] === "Avg" ? "moyenne du marché" : r[7][3]}, avant-match)` };
         if (r[8]) ex.close = { h: r[8][0], d: r[8][1], a: r[8][2], src: `football-data.co.uk (${r[8][3].replace(/C$/, "")} clôture)` };
         const cr = closeRefOf(r); if (cr) ex.closeRef = cr;
+        if (r[12]) ex.ou25 = { o: r[12][0], u: r[12][1], src: `football-data.co.uk (${r[12][2] === "B365" ? "Bet 365" : r[12][2] === "Avg" ? "moyenne du marché" : "Pinnacle"}, avant-match)` };
         if (!ex.odds && r[8] && m.row[6] !== null) ex.oddsIsClose = 1;
         if (r[9] && Number.isFinite(r[9][0])) ex.xg = r[9];
         joined++;
@@ -447,6 +450,38 @@
     for (const [id, o] of Object.entries(raw.oddsFr)) if (o[1] < lim) delete raw.oddsFr[id];
     return { kept, live, rejected };
   };
+  /** Marchés complémentaires d'un match (1 crédit par marché renvoyé) : les deux équipes marquent, plus/moins de buts */
+  E.oddsApiEventUrl = (comp, eventId, key) => `https://api.the-odds-api.com/v4/sports/${E.ODDS_API_SPORTS[comp]}/events/${encodeURIComponent(eventId)}/odds?apiKey=${encodeURIComponent(key)}&regions=fr&markets=btts,totals&oddsFormat=decimal&dateFormat=iso`;
+  const plausible2 = (a, b) => [a, b].every((x) => Number.isFinite(x) && x > 1.01 && x < 100) && 1 / a + 1 / b > 1.0 && 1 / a + 1 / b < 1.2;
+  /**
+   * Intègre la réponse /events/{id}/odds : raw.oddsFrX[id] = { comp, ko, home, away, at, btts: { livre: [oui, non] }, totals: { livre: { ligne: [plus, moins] } } }.
+   * Avant-match seulement, comme le 1N2.
+   */
+  E.mergeOddsApiEvent = function (raw, comp, ev, fetchedAt) {
+    raw.oddsFrX = raw.oddsFrX || {};
+    if (!ev || !ev.id || !(Date.parse(ev.commence_time) > Date.parse(fetchedAt))) return { kept: 0 };
+    const x = { comp, ko: ev.commence_time, home: ev.home_team, away: ev.away_team, at: fetchedAt, btts: {}, totals: {} };
+    let rejected = 0;
+    for (const b of ev.bookmakers || []) {
+      if (!E.FR_BOOKS[b.key]) continue;
+      for (const mk of b.markets || []) {
+        if (mk.key === "btts") {
+          const y = (mk.outcomes || []).find((o) => o.name === "Yes"), n = (mk.outcomes || []).find((o) => o.name === "No");
+          if (y && n && plausible2(+y.price, +n.price)) x.btts[b.key] = [+y.price, +n.price]; else rejected++;
+        } else if (mk.key === "totals") {
+          const lines = {};
+          for (const o of mk.outcomes || []) { const L = String(o.point); lines[L] = lines[L] || [null, null]; lines[L][o.name === "Over" ? 0 : 1] = +o.price; }
+          for (const [L, v] of Object.entries(lines)) if (plausible2(v[0], v[1])) { x.totals[b.key] = x.totals[b.key] || {}; x.totals[b.key][L] = v; } else rejected++;
+        }
+      }
+    }
+    if (!Object.keys(x.btts).length && !Object.keys(x.totals).length) return { kept: 0, rejected };
+    raw.oddsFrX[ev.id] = x;
+    const lim = new Date(Date.parse(fetchedAt) - 400 * 864e5).toISOString();
+    for (const [id, o] of Object.entries(raw.oddsFrX)) if (o.ko < lim) delete raw.oddsFrX[id];
+    return { kept: 1, rejected };
+  };
+
   /** Rattache chaque relevé français à sa rencontre : même compétition, date ±1 jour, noms d'équipes les plus proches. */
   E.joinOddsFr = function (raw, matchesByComp) {
     let joined = 0, unjoined = 0;
@@ -461,6 +496,8 @@
       }
       if (!best || bs < 1.2) { unjoined++; continue; }
       best.row[9].oddsFr = { books, at, first, ko, eventId: id };
+      const x = raw.oddsFrX && raw.oddsFrX[id];
+      if (x) best.row[9].oddsFrX = { btts: x.btts, totals: x.totals, at: x.at };
       joined++;
     }
     return { joined, unjoined };

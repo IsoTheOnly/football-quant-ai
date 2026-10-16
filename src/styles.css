@@ -344,3 +344,5 @@ details.adv[open] > summary { color: var(--fg); }
 .leg-i dt { font-weight: 600; font-size: 12.5px; }
 .leg-i dd { margin: 1px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
 @media (max-width: 560px) { .leg-grid { grid-template-columns: minmax(0, 1fr); } }
+.srcbox { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; }
+.srcbox > div { flex-basis: 100%; }

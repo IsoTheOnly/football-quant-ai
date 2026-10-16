@@ -231,7 +231,7 @@ let trainedFromSeed = false;
 { const p = path.join(ROOT, "data", "trained.json"); if (fs.existsSync(p)) { const sd = JSON.parse(fs.readFileSync(p, "utf8")); if (!trained || sd.generatedAt > trained.generatedAt) { trained = sd; trainedFromSeed = true; } } }
 let retrained = false;
 const stale = !trained || Date.now() - Date.parse(trained.generatedAt) > 7 * 864e5;
-if (process.argv.includes("--train") || stale) { trained = FQ.T.run(matches, { testTo: today, grid: true, onLog: (t) => console.error(t) }); retrained = true; }
+if (process.argv.includes("--train") || stale) { trained = FQ.T.run(matches, { testTo: FQ.T.FROZEN_TEST_TO, postTo: today, grid: true, onLog: (t) => console.error(t) }); retrained = true; }
 FQ.TRAINED = trained;
 
 let state = loadState();

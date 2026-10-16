@@ -367,6 +367,8 @@ window.__fqStartApp = function () {
     const last = ctx.autoInfo.lastMode === ctx.mode ? ctx.autoInfo.last : null;
     const meta = ctx.autoInfo.meta;
     const job = meta && meta.lastJob;
+    // une tâche programmée n'est pas une exécution réussie : seule l'écriture finale de la tâche (lastJob) fait foi
+    const jobLate = ctx.mode === "real" && P.shared && (!job || Date.now() - Date.parse(job.at) > 14 * 3600e3);
     const logs = (ctx.state.autoLog || []).slice().reverse();
     const sum = (r) => r ? [r.audited && `${r.audited} match(s) audité(s)`, r.settled && `${r.settled} pari(s) réglé(s)`, r.analysed && `${r.analysed} match(s) analysé(s)`, r.insufficient && `${r.insufficient} insuffisant(s)`, r.autoBets && `${r.autoBets} value bet(s) engagé(s) (${fr(r.staked, 2)} u)`, r.closed && `${r.closed} opportunité(s) close(s)`, r.calibration].filter(Boolean).join(" · ") || "rien de nouveau" : "—";
     const pending = ctx.state.opportunities.filter((o) => o.status === "ouverte" && !o.insufficient).length;
@@ -374,12 +376,12 @@ window.__fqStartApp = function () {
     return html`<section className="autopilot">
       <div className="ap-head">
         <span className="ap-dot" aria-hidden="true"></span>
-        <div className="min-w-0"><b>Automatique</b> <span className="muted small">· ${ctx.mode === "demo" ? "données fictives (démo)" : html`dernier résultat le ${dFR(ctx.matches.filter((m) => m.hg !== null && !m.manual && m.date <= ctx.today).map((m) => m.date).sort().slice(-1)[0])}${job ? html` · collecte ${dtFR(job.at)}` : ""}`} · analyse des ${ctx.settings.horizonDays || 14} prochains jours, tickets, audit et apprentissage sans clic</span></div>
+        <div className="min-w-0"><b>Automatique</b>${jobLate ? html` <span className="t-warn small">· tâche planifiée en retard</span>` : ""} <span className="muted small">· ${ctx.mode === "demo" ? "données fictives (démo)" : html`dernier résultat le ${dFR(ctx.matches.filter((m) => m.hg !== null && !m.manual && m.date <= ctx.today).map((m) => m.date).sort().slice(-1)[0])}${job ? html` · collecte ${dtFR(job.at)}` : ""}`} · analyse des ${ctx.settings.horizonDays || 14} prochains jours, tickets, audit et apprentissage sans clic</span></div>
         <${Btn} small onClick=${() => setOpen(!open)}>${open ? "Masquer" : "Détails"}<//>
       </div>
       ${open && html`<div className="ap-grid">
         <div><div className="eyebrow">Dernier cycle (cette page)</div><div className="small">${last ? `${dtFR(last.at)} · ${sum(last)}` : "en cours…"}</div></div>
-        ${ctx.mode === "real" && html`<div><div className="eyebrow">Tâche planifiée quotidienne</div><div className="small">${job ? `${dtFR(job.at)} · ${sum(job.report)}` : P.shared ? "pas encore exécutée" : "base de l'artefact non disponible dans cette vue"}</div></div>`}
+        ${ctx.mode === "real" && html`<div><div className="eyebrow">Dernière exécution réussie de la tâche planifiée</div><div className=${"small " + (jobLate ? "t-warn" : "")}>${job ? `${dtFR(job.at)} · ${sum(job.report)}` : P.shared ? "aucune exécution réussie enregistrée" : "base de l'artefact non disponible dans cette vue"}${jobLate ? html`<br /><b>Plus de 14 h sans exécution réussie</b> (prévue à 6 h 54 et 18 h 54) : les données affichées peuvent dater. Le dernier état fiable est conservé.` : ""}</div></div>`}
         <div><div className="eyebrow">Données</div><div className=${"small " + (ctx.dataAgeDays > 10 ? "t-warn" : "")}>${ctx.mode === "demo" ? "fictives (démo)" : `dernier résultat connu le ${dFR(ctx.matches.filter((m) => m.hg !== null && !m.manual && m.date <= ctx.today).map((m) => m.date).sort().slice(-1)[0])} (${ctx.dataAgeDays} j)`}</div></div>
         ${ctx.state.coverage && html`<div><div className="eyebrow">Couverture des 14 jours</div><div className=${"small " + (ctx.state.coverage.nIssues ? "t-warn" : "")}>${(() => { const c = ctx.state.coverage.totals || {}; return `${c.analysed || 0}/${c.up || 0} matchs à venir analysés · ${c.odds || 0} avec cote (${c.fr || 0} française) · ${ctx.state.coverage.nIssues ? ctx.state.coverage.nIssues + " point(s) à vérifier" : "aucune anomalie"}`; })()}</div></div>`}
         <div><div className="eyebrow">Opportunités ouvertes</div><div className="small">${pending}${noOdds ? ` dont ${noOdds} sans cote publiée (BTTS, joueurs, compétitions sans cote à ce jour) : seuil du modèle et cote minimale affichées` : ""}</div></div>
@@ -398,10 +400,10 @@ window.__fqStartApp = function () {
   function CoverageTable({ cov }) {
     const rows = COMP_ORDER.filter((c) => cov.comps[c]).map((c) => [c, cov.comps[c]]);
     return html`<details className="mt-2 small"><summary>Contrôle de couverture du ${dFR(cov.from)} au ${dFR(cov.to)} · ${cov.nIssues ? `${cov.nIssues} point(s) à vérifier` : "aucune anomalie"}</summary>
-      <${TableWrap}><table className="tbl tiny"><thead><tr><th>Comp.</th><th>À venir</th><th>Analysés</th><th>Avec cote</th><th>Cote FR</th><th>Sous 3 j avec cote</th><th>Résultat manquant</th><th>Reportés</th><th>Doublons</th><th>Dernier résultat</th></tr></thead>
-        <tbody>${rows.map(([c, x]) => html`<tr key=${c}><td><${CompTag} code=${c} /></td><td className="mono">${x.up}</td><td className=${"mono " + (x.analysed < x.up ? "t-warn" : "")}>${x.analysed}</td><td className="mono">${x.odds}</td><td className="mono">${x.fr}</td><td className=${"mono " + (x.soonOdds < x.soon ? "t-warn" : "")}>${x.soon ? `${x.soonOdds}/${x.soon}` : "—"}</td><td className=${"mono " + (x.missingRes ? "t-warn" : "")}>${x.missingRes}</td><td className="mono">${x.postponed}</td><td className=${"mono " + (x.dup ? "t-warn" : "")}>${x.dup}</td><td className="mono">${x.lastResult ? dFR(x.lastResult) : "—"}</td></tr>`)}</tbody></table><//>
+      <${TableWrap}><table className="tbl tiny"><thead><tr><th>Comp.</th><th>État</th><th>À venir</th><th>Analysés</th><th>Avec cote</th><th>Cote FR</th><th>Bet 365</th><th>Sous 3 j avec cote</th><th>Résultat manquant</th><th>Reportés</th><th>Doublons</th><th>Dernier résultat</th></tr></thead>
+        <tbody>${rows.map(([c, x]) => html`<tr key=${c}><td><${CompTag} code=${c} /></td><td className=${x.status === "partielle" ? "t-warn" : x.status === "couverte" ? "" : "muted"} title=${Object.entries(x.sources || {}).map(([k, v]) => `${k} : ${v}`).join(", ")}>${x.status || "—"}</td><td className="mono">${x.up}</td><td className=${"mono " + (x.analysed < x.up ? "t-warn" : "")}>${x.analysed}</td><td className="mono">${x.odds}</td><td className="mono">${x.fr}</td><td className="mono">${x.b365 || 0}</td><td className=${"mono " + (x.soonOdds < x.soon ? "t-warn" : "")}>${x.soon ? `${x.soonOdds}/${x.soon}` : "—"}</td><td className=${"mono " + (x.missingRes ? "t-warn" : "")}>${x.missingRes}</td><td className="mono">${x.postponed}</td><td className=${"mono " + (x.dup ? "t-warn" : "")}>${x.dup}</td><td className="mono">${x.lastResult ? dFR(x.lastResult) : "—"}</td></tr>`)}</tbody></table><//>
       ${cov.issues.length > 0 && html`<ul className="notes tiny mt-1">${cov.issues.slice(0, 30).map((x, i) => html`<li key=${i}><b>${x.kind}</b> · ${SHORT[x.comp] || x.comp} · ${x.text}</li>`)}</ul>`}
-      <div className="tiny muted">Vérifié à chaque cycle (${dtFR(cov.at)}). Un match à plus de 3 jours sans cote est normal : les bookmakers publient en général 3 à 5 jours avant.</div></details>`;
+      <div className="tiny muted">Sources : calendriers et résultats ESPN (Super League suisse complétée par openfootball), cotes françaises The Odds API, cotes Bet 365 ESPN / football-data.co.uk ; survole l'état pour voir la source des matchs. Vérifié à chaque cycle (${dtFR(cov.at)}). Un match à plus de 3 jours sans cote est normal : les bookmakers publient en général 3 à 5 jours avant.</div></details>`;
   }
 
   /* --------------------------------------------------------------- légende et lexique (bas de page) */
@@ -1352,6 +1354,7 @@ window.__fqStartApp = function () {
       const t = mine.find((x) => x.scenario === sc.id);
       if (t) return { sc, t };
       const p = prev && prev.find((x) => x.sc.id === sc.id);
+      if (p && p.skip) return { sc, t: null, skipPrev: p.skip };
       return p && p.ticket ? { sc, t: Object.assign({ label: sc.label, scenario: sc.id, stake: sc.stake, strategyLabel: p.rule, reason: p.why || p.reason, bookName: p.bookName }, p.ticket, { legs: p.ticket.legs, byN: (p.ticket.byN || []).map((x) => ({ n: x.n, p: x.pJoint, odds: x.totalOdds })) }), preview: true } : { sc, t: null };
     });
     const bt = FQ.TRAINED && FQ.TRAINED.tickets;
@@ -1359,8 +1362,10 @@ window.__fqStartApp = function () {
       <p className="muted small lead">${win.open
         ? "Construits sur les matchs du jeudi au dimanche, avec les cotes réelles publiées. Ils sont réoptimisés à chaque mise à jour jusqu'au premier coup d'envoi, puis figés et joués en paper betting (1 u fictive chacun)."
         : "Les tickets de la semaine sont construits à partir de jeudi, quand les cotes du week-end sont publiées. En attendant, voici un aperçu avec les cotes déjà disponibles (non joué)."}</p>
-      <div className="tickets">${items.map(({ sc, t, preview }) => t ? html`<${TicketCard} key=${sc.id} ctx=${ctx} t=${t} sc=${sc} preview=${preview} />`
-        : html`<article key=${sc.id} className=${"ticket tk-" + sc.id + " tk-empty"}><div className="tk-name">${sc.label}</div><div className="muted small">Pas encore assez de matchs avec cote pour viser une cote ${SC_HINT[sc.id]}. Les cotes arrivent environ 3 jours avant les matchs.</div></article>`)}</div>
+      <div className="tickets">${items.map(({ sc, t, preview, skipPrev }) => { const skip = skipPrev || (!t || preview ? (state.ticketSkip || {})[win.week + "|" + sc.id] : null);
+        return t && !(skip && preview) ? html`<${TicketCard} key=${sc.id} ctx=${ctx} t=${t} sc=${sc} preview=${preview} />`
+        : skip ? html`<article key=${sc.id} className=${"ticket tk-" + sc.id + " tk-empty"}><div className="tk-name">${sc.label}</div><div className="small"><b>Aucun ticket admissible cette semaine.</b></div><div className="muted small">${skip.reason}. La stratégie reste suivie en fantôme.</div></article>`
+        : html`<article key=${sc.id} className=${"ticket tk-" + sc.id + " tk-empty"}><div className="tk-name">${sc.label}</div><div className="muted small">Pas encore assez de matchs avec cote pour viser une cote ${SC_HINT[sc.id]}. Les cotes arrivent environ 3 jours avant les matchs.</div></article>`; })}</div>
       <div className="mt-2 small"><button className="link small" onClick=${() => openLegend("ticket")}>Légende des tickets et lexique</button></div>
       <details className="mt-2 small"><summary className="muted">Comment lire ces tickets</summary>
         <ul className="notes muted">
@@ -1402,6 +1407,25 @@ window.__fqStartApp = function () {
           <td><${NumInput} value=${u ? u.v : null} min=${1.01} max=${1000} placeholder="cote" onChange=${(v) => setUser(key, v)} /></td></tr>`; })}
       </tbody></table><//>
       <p className="tiny muted mt-1">Marché = cotes sans marge ; modèle seul = notre modèle sportif sans les cotes (en orange quand il s'écarte de 8 points ou plus : estimation moins sûre). « Intéressant dès » : cote minimale pour une espérance d'au moins ${Math.round(100 * evMin)} % selon nos probabilités. Saisis la cote que tu vois (même boostée) : l'espérance se recalcule et la sélection peut entrer dans les tickets. * = cote estimée (double chance déduite du 1N2).</p></div>`;
+  }
+
+  /**
+   * D'où vient la probabilité d'un choix : modèle sportif seul, marché sans marge, retenue, poids appliqué, écart (incertitude),
+   * et origine du choix (value bet ou issue la plus probable). Une probabilité tirée du marché n'est pas présentée comme une prédiction du modèle.
+   */
+  function PickSources({ ctx, pick }) {
+    const pred = useMemo(() => { let x = null; for (const p of ctx.state.predictions) if (p.matchId === pick.matchId) x = p; return x; }, [ctx.state.predictions, pick.matchId]);
+    if (!pred) return null;
+    const q = FQ.P.legProbs(pred, pick.market, pick.sel);
+    const w = pred.blend && U.isNum(pred.blend.w) ? pred.blend.w : q.mk === null ? 1 : null;
+    const gap = q.mk !== null && q.mo !== null ? Math.abs(q.mo - q.mk) : null;
+    const origin = w === 0 ? "la probabilité retenue est celle du marché (le modèle n'a pas montré qu'il faisait mieux dans cette compétition)" : w === 1 ? "pas de cote pour ce marché : probabilité du modèle seul, moins sûre" : `mélange : ${Math.round(100 * w)} % modèle, ${Math.round(100 * (1 - w))} % marché`;
+    return html`<div className="srcbox tiny mt-1">
+      <span><span className="muted">Modèle sportif seul</span> <b className="mono">${q.mo === null ? pct(pick.p, 0) : pct(q.mo, 0)}</b></span>
+      <span><span className="muted">Marché sans marge</span> <b className="mono">${q.mk === null ? "—" : pct(q.mk, 0)}</b></span>
+      <span><span className="muted">Retenue</span> <b className="mono">${pct(pick.p, 0)}</b></span>
+      ${gap !== null && html`<span className=${gap >= 0.08 ? "t-warn" : ""}><span className="muted">Écart modèle / marché</span> <b className="mono">${Math.round(100 * gap)} pts</b></span>`}
+      <div className="muted mt-1">${origin}. Choix : ${pick.kind === "value" ? "value bet (cote au-dessus du seuil)" : "issue la plus probable (pas de value bet)"}.</div></div>`;
   }
 
   /** Filtres et tri des pronostics (mémorisés dans ce navigateur) */
@@ -1465,7 +1489,7 @@ window.__fqStartApp = function () {
           <div className="mc-teams ellip">${p.home} <span className="muted">–</span> ${p.away}</div>
           <div className="mc-pick"><span className="mc-sel">${p.label}</span><span className="pbar" aria-hidden="true"><i style=${{ width: Math.round(100 * p.p) + "%" }}></i></span><span className="mono small">${pct(p.p, 0)}</span></div>
           <div className="muted tiny">${p.odds ? html`cote <b className="mono t-fg">${fr(p.odds, 2)}</b> <span title=${p.oddsSrc || ""}>${srcShort(p.oddsSrc)}</span>${p.kind === "value" ? html` · <span className="t-pos">value bet</span>` : ""}` : html`aucune cote de bookmaker pour ce marché · à jouer à partir de <span className="mono">${fr(p.minOdds, 2)}</span> (seuil du modèle)`} · fiabilité ${p.rel}/100</div>
-          ${open === p.id && html`<div className="small mt-1 explain-in"><div>${p.why}</div><${SelectionTable} ctx=${ctx} matchId=${p.matchId} /><div className="muted tiny mt-1">Règle : une value bet admissible (cote connue, espérance ≥ seuil, fiabilité suffisante) est choisie en priorité ; sinon l'issue la plus probable parmi 1, N, 2 et « les deux équipes marquent » oui / non. Choix figé au coup d'envoi.</div></div>`}
+          ${open === p.id && html`<div className="small mt-1 explain-in"><div>${p.why}</div><${PickSources} ctx=${ctx} pick=${p} /><${SelectionTable} ctx=${ctx} matchId=${p.matchId} /><div className="muted tiny mt-1">Règle : une value bet admissible (cote connue, espérance ≥ seuil, fiabilité suffisante) est choisie en priorité ; sinon l'issue la plus probable parmi 1, N, 2 et « les deux équipes marquent » oui / non. Choix figé au coup d'envoi.</div></div>`}
         </div>
         <div className="mc-act">
           <${Btn} small kind=${added ? "primary" : "ghost"} onClick=${() => ctx.toggleSlip(p)} title="Ajouter à mon ticket">${added ? html`<${Ic} n="Check" /> Ajouté` : html`<${Ic} n="Plus" /> Ticket`}<//>
@@ -1922,6 +1946,23 @@ window.__fqStartApp = function () {
     <//>`;
   }
 
+  /** Suivi prospectif : prévisions réellement émises avant les matchs (journal jamais réécrit), évaluées par horizon */
+  function ForecastCard({ ctx }) {
+    const { state } = ctx;
+    const ev = useMemo(() => FQ.P.forecastEval(state), [state.forecastLog, state.results, state.forecastArchive]);
+    const HL = { "J-14": "10 à 14 jours avant", "J-7": "5 à 10 jours avant", "J-3": "2 à 5 jours avant", "J-1": "12 h à 2 jours avant", "J-0": "moins de 12 h avant", KO: "dernière prévision avant le coup d'envoi" };
+    const ci = (d) => (d && d.ci ? `${sgn(d.ci[0], 3)} à ${sgn(d.ci[1], 3)}` : "—");
+    const S0 = (FQ.TRAINED && FQ.TRAINED.summary0) || {};
+    return html`<${Card} eyebrow="Suivi prospectif" title="Prévisions réellement émises, comparées au marché">
+      <p className="muted small lead">Chaque prévision est enregistrée avant le match (probabilités du modèle seul, du marché sans marge et retenues, choix, cote et sa source, inclusion dans un ticket), puis jamais modifiée. C'est la seule mesure vraiment indépendante : rien ici n'a servi à régler le modèle. ${ev.rows ? `${ev.rows} instantanés depuis le ${dFR(String(ev.since).slice(0, 10))}.` : "Le journal démarre aujourd'hui : les premiers résultats arriveront avec les matchs du week-end."}</p>
+      ${!ev.buckets.length ? html`<${Empty} icon="Hourglass">Aucun match du journal n'est encore terminé.<//>` : html`<${TableWrap}><table className="tbl tiny"><thead><tr><th>Horizon</th><th>Matchs</th><th>Log loss retenue</th><th>Log loss modèle seul</th><th title="sur les matchs où une cote existait">Marché (matchs cotés)</th><th>Écart retenue − marché (IC 95 %)</th><th>Issue la plus probable juste</th></tr></thead><tbody>
+        ${ev.buckets.map((x) => html`<tr key=${x.b}><td>${HL[x.b] || x.b}</td><td className="mono">${x.n}</td><td className="mono">${fr(x.llF, 3)}</td><td className="mono">${fr(x.llM, 3)}</td><td className="mono">${x.nK ? `${fr(x.llK, 3)} (${x.nK})` : "—"}</td><td className="mono">${x.diff ? `${sgn(x.diff.mean, 3)} (${ci(x.diff)})` : "—"}</td><td className="mono">${pct(x.acc, 0)}</td></tr>`)}
+      </tbody></table><//>`}
+      ${ev.versions.length > 1 && html`<div className="eyebrow mt-2">Par version du modèle (dernière prévision avant le match)</div><${TableWrap}><table className="tbl tiny"><thead><tr><th>Version</th><th>Matchs</th><th>Log loss retenue</th><th>Marché</th></tr></thead><tbody>${ev.versions.map((x) => html`<tr key=${x.v}><td className="mono">${x.v}</td><td className="mono">${x.n}</td><td className="mono">${fr(x.llF, 3)}</td><td className="mono">${x.nK ? fr(x.llK, 3) : "—"}</td></tr>`)}</tbody></table><//>`}
+      <p className="tiny muted mt-1">Log loss : plus bas = meilleur. Un écart négatif dont l'intervalle reste sous zéro voudrait dire que nous battons le marché ; avec moins de quelques centaines de matchs, l'intervalle est trop large pour conclure. Référence historique figée (test final du ${dFR((FQ.TRAINED && FQ.TRAINED.protocol && FQ.TRAINED.protocol.testFrom) || "")} au ${dFR((FQ.TRAINED && FQ.TRAINED.protocol && FQ.TRAINED.protocol.testTo) || "")}) : retenue ${fr(S0.testLLFinal, 3)}, marché ${fr(S0.testMarketLL, 3)}, modèle seul ${fr(S0.testModelLL, 3)}.</p>
+    <//>`;
+  }
+
   function Performance({ ctx }) {
     const { state, acct, settings } = ctx;
     const [hq, setHq] = useState(""); const [hComp, setHComp] = useState("ALL"); const [hMarket, setHMarket] = useState("ALL"); const [hStatus, setHStatus] = useState("ALL");
@@ -1954,6 +1995,7 @@ window.__fqStartApp = function () {
     }
 
     return html`<div className="stack">
+      <${ForecastCard} ctx=${ctx} />
       <${LearningCard} ctx=${ctx} />
       <${ClvCard} ctx=${ctx} />
       <div className="stats">
@@ -2062,10 +2104,12 @@ window.__fqStartApp = function () {
           <div className="muted tiny mt-1">« Pas de veto » : pertes non démontrées statistiquement (forte variance des grosses cotes), pas un feu vert. Opportunités que le modèle seul jugeait favorables, récompense réelle observée au résultat (cote − 1 si gagné, −1 si perdu). L'agent refuse un état quand la borne haute de son gain moyen est négative.</div></div>
       </div>
       ${TK && TK.scenarios && html`<div className="mt-3"><div className="eyebrow">Tickets de la semaine rejoués sur l'historique (1 u par ticket, cotes réelles d'avant-match)</div>
-        <${TableWrap}><table className="tbl small"><thead><tr><th>Niveau</th><th>Stratégie de départ</th><th>Tickets appr.</th><th>Gagnés</th><th>Cote moy.</th><th>Sélections moy.</th><th>ROI appr.</th><th>Tickets test</th><th>Gagnés (IC 95 %)</th><th>ROI test (IC 95 %)</th></tr></thead>
+        <${TableWrap}><table className="tbl small"><thead><tr><th>Niveau</th><th>Stratégie de départ</th><th>Tickets appr.</th><th>Gagnés</th><th>Cote moy.</th><th>Sélections moy.</th><th>ROI appr.</th><th>Tickets test</th><th>Gagnés (IC 95 %)</th><th>ROI test (IC 95 %)</th><th title="mêmes semaines aux cotes Bet 365 réellement observées, sans conversion vers les prix français">Sans approximation : gagnés passé / test</th></tr></thead>
           <tbody>${TK.scenarios.filter((x) => x.arms && x.arms[x.start]).map((x) => { const a = x.arms[x.start].train, b = x.arms[x.start].test; return html`<tr key=${x.id}><td>${x.label}</td><td>${(FQ.P.TICKET_ARMS.find((y) => y.id === x.start) || {}).label || x.start}</td>
             <td className="mono">${a.n}</td><td className="mono">${a.won}</td><td className="mono">${fr(a.avgOdds, 1)}</td><td className="mono">${fr(a.avgLegs, 1)}</td><td className=${"mono " + (a.roi > 0 ? "t-pos" : "t-neg")}>${a.roi === null ? "—" : sgn(100 * a.roi, 0) + " %"}</td>
-            <td className="mono">${b.n}</td><td className="mono">${b.won}${b.hitCI ? ` (${pct(b.hitCI[0], 0)}–${pct(b.hitCI[1], 0)})` : ""}</td><td className=${"mono " + (b.roi > 0 ? "t-pos" : "t-neg")}>${b.roi === null ? "—" : sgn(100 * b.roi, 0) + " %"}${b.roiCI ? ` (${sgn(100 * b.roiCI[0], 0)} à ${sgn(100 * b.roiCI[1], 0)})` : ""}</td></tr>`; })}</tbody></table><//>
+            <td className="mono">${b.n}</td><td className="mono">${b.won}${b.hitCI ? ` (${pct(b.hitCI[0], 0)}–${pct(b.hitCI[1], 0)})` : ""}</td><td className=${"mono " + (b.roi > 0 ? "t-pos" : "t-neg")}>${b.roi === null ? "—" : sgn(100 * b.roi, 0) + " %"}${b.roiCI ? ` (${sgn(100 * b.roiCI[0], 0)} à ${sgn(100 * b.roiCI[1], 0)})` : ""}</td>
+            <td className="mono">${x.rawOdds ? `${x.rawOdds.train.won}/${x.rawOdds.train.n} · ${x.rawOdds.test.won}/${x.rawOdds.test.n}` : "—"}</td></tr>`; })}</tbody></table><//>
+        <div className="muted tiny mt-1">Provenance des cotes : historique = cotes Bet 365 réellement observées (football-data.co.uk) ramenées au niveau français par un facteur mesuré (× ${fr(TK.frFactor && TK.frFactor.factor, 3)}) : c'est une approximation, pas une cote française observée. La dernière colonne refait le calcul aux cotes Bet 365 brutes. En direct : cotes françaises collectées (The Odds API), double chance estimée (*), cotes saisies par toi marquées comme telles. ${T.post ? `Après le gel du test (${dFR(T.post.from)} → ${dFR(T.post.to)}, ${T.post.n} matchs cotés) : log loss retenue ${r4(T.post.llFinal)}, marché ${r4(T.post.llMarket)}.` : ""}</div>
         <div className="muted tiny mt-1">${TK.note} Échantillons très petits (une quarantaine de semaines) : un ticket gagné de plus ou de moins change le rendement de dizaines de points. Toutes les stratégies et leur suivi réel : carte « Apprentissage continu » ci-dessus.</div></div>`}
     <//>`;
   }
@@ -2167,6 +2211,7 @@ window.__fqStartApp = function () {
         <${Field} label="Bookmaker de référence" id="s-book" hint="cotes utilisées pour les choix et les tickets ; s'il n'a pas coté un match : médiane des bookmakers français, puis Bet 365"><select id="s-book" className="inp" value=${s.oddsBook || "best"} onChange=${(e) => setS({ ...s, oddsBook: e.target.value, oddsBookUser: true })}>
           <option value="best">Meilleur prix des 5 bookmakers français</option>
           ${Object.entries((FQ.ETL && FQ.ETL.FR_BOOKS) || {}).map(([k, v]) => html`<option key=${k} value=${k}>${v}</option>`)}</select><//>
+        <${Field} label="Espérance minimale d'un ticket (%)" id="s-evf" hint="en dessous, « aucun ticket admissible » plutôt qu'un ticket forcé (les stratégies restent suivies en fantôme)"><${NumInput} id="s-evf" value=${U.isNum(s.ticketEvFloor) ? Math.round(100 * s.ticketEvFloor) : -20} min=${-90} max=${50} onChange=${(v) => setS({ ...s, ticketEvFloor: v === null ? -0.2 : v / 100 })} /><//>
         <${Field} label="Multiboost Betclic" id="s-mb" hint="bonus de cote des combinés Betclic à partir de 5 sélections ; barème appris sur tes tickets Betclic saisis"><select id="s-mb" className="inp" value=${s.multiboost === true ? "on" : "off"} onChange=${(e) => setS({ ...s, multiboost: e.target.value === "on", multiboostUser: true })}><option value="off">Ignoré</option><option value="on">Appliqué (tickets chiffrés chez Betclic)</option></select><//>
         ${F("initialBankroll", "Capital de référence (unités)", "aucune bankroll réelle : 100 u par défaut", 1)}
         ${F("kellyFraction", "Kelly fractionné (%)", "25 % par défaut", 100)}

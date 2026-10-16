@@ -86,6 +86,12 @@ Validation chronologique en trois périodes : apprentissage (01/07/2025 → 28/0
 - Le test final n'est utilisé pour aucun choix : il est seulement mesuré, avec intervalles de confiance (Wilson pour les taux de réussite, bootstrap pour les rendements et les écarts de log loss).
 - Sources séparées : chaque sélection garde la probabilité du marché sans marge, celle du modèle sportif seul et la probabilité retenue (mélange appris).
 
+## Suivi prospectif
+
+- Le test final (01/07 → 15/10/2026) a été consulté pendant le développement : il est figé comme référence historique (`data/reference_test_2026-10-16.json`, `FQ.T.FROZEN_TEST_TO`) et ne sert plus à aucun choix.
+- Journal des prévisions (`state.forecastLog`, jamais réécrit) : un instantané par match et par horizon (J-14, J-7, J-3, J-1, J-0), plus la dernière prévision avant le coup d'envoi, avec modèle seul, marché, retenue, poids, choix, cote, source, fiabilité et inclusion dans un ticket. Évalué par horizon et par version (Performance › Suivi prospectif). Les lignes de plus de 120 jours passent dans des totaux archivés.
+- Drivers : chaque candidat est construit sans fuite, appris sur l'apprentissage, gardé seulement s'il améliore la validation. Repos et congestion : rejetés (`tools/driver_repos.js`).
+
 ## Tickets
 
 Quatre niveaux : Sûr 1,4–1,8, Prudent 3–4, Équilibré 7–8, Audacieux 40–60.
@@ -93,6 +99,7 @@ Quatre niveaux : Sûr 1,4–1,8, Prudent 3–4, Équilibré 7–8, Audacieux 40�
 - **Chance et profit ensemble** : à cote totale fixée, chance = produit des rendements des sélections (chance × cote) ÷ cote, et l'espérance suit le même produit. Le ticket garde les sélections où le bookmaker prélève le moins, avec le nombre de sélections qui donne la meilleure chance (comparé de 1 à 15), et à 10 % près le meilleur rendement.
 - **Prudence** : probabilité diminuée de κ × |modèle − marché| quand les deux sources divergent ; κ choisi sur le passé d'après le rendement réalisé des sélections.
 - **Stratégies** (favoris 45 / 55 / 65 %, chance max avec ou sans nul, sécurisé multi-marchés, multi-marchés, valeur) : chacune propose son ticket, suivi en fantôme. La stratégie jouée a la plus forte chance corrigée par son historique (tickets gagnés ÷ annoncés, semaines rejouées à demi-poids, rétréci vers 1). Cette procédure et l'autre (meilleur taux de réussite) sont rejouées semaine par semaine sans regarder l'avenir ; la meilleure sur le passé est retenue.
+- **Aucun ticket admissible** quand le meilleur ticket d'un niveau a une espérance sous le seuil (−20 % par défaut, Paramètres) ; la stratégie reste suivie en fantôme.
 - **Justification** de chaque sélection en clair (issue, marché / modèle, marge prélevée comparée aux autres sélections, contexte) et de chaque ticket (méthode, comparaison par nombre de sélections, autres stratégies, seuil de rentabilité).
 
 ## Audit

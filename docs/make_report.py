@@ -207,7 +207,8 @@ story.append(P("Un score de fiabilité (0–100) tient compte du nombre de match
 story.append(P("5. Protocole de validation (sans tricher)", "h1"))
 story += bullets([
     "Validation chronologique : pour prédire un match, le modèle n'utilise que les matchs joués avant. Aucune information du futur.",
-    "Trois périodes. Apprentissage (1er juillet 2025 → 28 février 2026) : le modèle ajuste ses paramètres. Validation (1er mars → 30 juin 2026) : elle décide si un réglage est gardé. Test final (depuis le 1er juillet 2026) : il est seulement mesuré et ne sert à aucun choix.",
+    "Trois périodes. Apprentissage (1er juillet 2025 → 28 février 2026) : le modèle ajuste ses paramètres. Validation (1er mars → 30 juin 2026) : elle décide si un réglage est gardé. Test final (1er juillet → 15 octobre 2026) : il est seulement mesuré et ne sert à aucun choix.",
+    "Ce test final a été consulté pendant le développement : il est figé au 16 octobre 2026 comme référence historique (fichier data/reference_test_2026-10-16.json) et ne sera plus jamais utilisé pour choisir. La mesure indépendante, désormais, c'est le journal des prévisions réellement émises (partie 7.5).",
     "Un réglage gardé est réajusté sur apprentissage + validation avant d'être mesuré sur le test.",
     "Intervalles de confiance à 95 % : Wilson pour les taux de réussite, bootstrap pour les rendements et les écarts de log loss. Avec 8 semaines de test, la plupart des intervalles sont très larges : aucune conclusion de rentabilité n'est possible.",
     "Comparaisons systématiques avec deux références : les fréquences naïves (domicile/nul/extérieur) et les cotes du marché.",
@@ -275,6 +276,48 @@ story.append(box("<b>Pourquoi on ne peut pas, aujourd'hui, avoir à la fois une 
                  "Elle ne devient positive que si notre p est meilleur que celui du marché (un avantage d'information ou de modèle), ou si la cote est meilleure que la normale (cote boostée, promotion, meilleur prix). "
                  "La logique actuelle cherche donc ces deux sources et affiche, pour chaque ticket, la cote totale à partir de laquelle il deviendrait rentable.", NEG))
 
+# --- 7.5 suivi prospectif, 7.6 drivers, 7.7 audit des tickets
+story.append(P("7.5 Suivi prospectif : le journal des prévisions", "h2"))
+story.append(P("Depuis le 16 octobre 2026, chaque prévision est enregistrée avant le match et n'est jamais réécrite : un instantané quand le match entre dans chaque horizon (10 à 14 jours, 5 à 10, 2 à 5, 12 h à 2 jours, moins de 12 h), plus la dernière prévision émise avant le coup d'envoi. "
+               "Chaque ligne garde le match, l'heure d'émission, la version du modèle, les probabilités du modèle sportif seul, du marché sans marge et retenues, le poids du modèle, le choix, la cote et sa source, la fiabilité et l'inclusion dans un ticket (niveau, pari réel ou test). "
+               "La page compare, par horizon, la log loss retenue, celle du modèle seul et celle du marché sur les mêmes matchs, avec un intervalle de confiance, et par version du modèle. Les premiers résultats arrivent avec les matchs du week-end ; il faudra plusieurs centaines de matchs pour conclure quoi que ce soit."))
+DIS = T["summary0"].get("disagree")
+if DIS:
+    rows = [["Quand le modèle seul s'écarte du marché de 8 points ou plus", "Issues", "Modèle disait", "Marché disait", "Arrivé"]]
+    for lab, per in (("passé", "past"), ("test final", "test")):
+        for k, l in (("up", "plus optimiste"), ("down", "moins optimiste")):
+            x = DIS[per][k]; rows.append([f"Modèle {l} · {lab}", x["n"], pc(x["mo"], 1), pc(x["mk"], 1), pc(x["y"], 1)])
+    story.append(KeepTogether([P("Qui avait raison quand modèle et marché divergent", "h2"), table(rows, [70 * mm, 20 * mm, 26 * mm, 26 * mm, 28 * mm]),
+        P("Quand ils divergent, c'est presque toujours le marché qui avait raison a posteriori : la prudence appliquée aux tickets est justifiée par les faits, pas par principe. Ce tableau est recalculé en direct sur la page à partir du journal.", "small")]))
+story.append(P("7.6 Drivers testés", "h2"))
+story.append(P("Un driver n'est gardé que s'il améliore la validation, construit uniquement avec l'information disponible avant le match. Premier test : repos et congestion du calendrier, calculés à partir de nos propres calendriers (aucune source extérieure)."))
+story.append(table([
+    ["Driver (construction)", "Appris sur l'apprentissage", "Effet sur la validation (log loss, IC 95 %)", "Décision"],
+    ["Jours de repos (écart domicile − extérieur, borné 2–8 j)", "β = 0 sur le modèle ; −0,01 sur le marché", "−0,0002 (−0,0006 à +0,0005)", "Rejeté : rien de démontré"],
+    ["Repos court (3 jours ou moins)", "β = 0 sur le modèle ; −0,03 sur le marché", "−0,0003 (−0,0006 à 0,0000)", "Rejeté : intervalle qui touche zéro"],
+    ["Congestion (matchs joués sur 21 jours)", "β = 0", "0", "Rejeté"],
+], [56 * mm, 40 * mm, 46 * mm, 28 * mm]))
+story.append(P("Limite : nos calendriers ne contiennent pas les coupes nationales ni la Ligue Europa et la Conférence, donc le repos est mal mesuré pour les équipes engagées partout. Le script est dans tools/driver_repos.js.", "small"))
+story.append(table([
+    ["Source gratuite", "Contenu utile", "Conditions", "Statut"],
+    ["API-Football (offre gratuite)", "Blessures, compositions, statistiques joueurs", "100 requêtes par jour, compte et clé nécessaires ; saisons accessibles à vérifier", "À tester si tu crées un compte (clé gardée hors du dépôt)"],
+    ["ClubElo (api.clubelo.com)", "Classement Elo quotidien des clubs européens", "Gratuit, fichiers CSV ; domaine à autoriser", "Candidat : risque de double emploi avec nos forces d'équipe, à valider"],
+    ["Understat", "xG des 6 grands championnats", "Pas d'API officielle : il faudrait aspirer le site, conditions d'utilisation non claires", "Écarté (règle : aucun contournement)"],
+    ["StatsBomb Open Data", "Événements détaillés", "Gratuit, mais compétitions passées choisies seulement", "Inutile pour les matchs à venir"],
+], [36 * mm, 42 * mm, 56 * mm, 36 * mm]))
+story.append(P("7.7 Audit des tickets et de leurs dépendances", "h2"))
+rows = [["Niveau", "Stratégie de départ", "Tickets gagnés / annoncés", "Sélections gagnées / annoncées", "Aux cotes Bet 365 brutes (passé · test)"]]
+for sc in T["tickets"]["scenarios"]:
+    a = sc["arms"][sc["start"]]; tr, te = a["train"], a["test"]
+    rows.append([sc["label"], ARM.get(sc["start"], sc["start"]), f"{tr['won'] + te['won']} / {fr(tr['expected'] + te['expected'], 1)}", f"{tr['legs']['won'] + te['legs']['won']} / {fr(tr['legs']['expected'] + te['legs']['expected'], 0)}",
+                 f"{sc['rawOdds']['train']['won']}/{sc['rawOdds']['train']['n']} · {sc['rawOdds']['test']['won']}/{sc['rawOdds']['test']['n']}"])
+story.append(table(rows, [22 * mm, 40 * mm, 34 * mm, 36 * mm, 38 * mm]))
+story += bullets([
+    "Corrélations : un ticket ne contient jamais deux sélections du même match, donc aucune corrélation interne au match. Entre matchs différents, l'indépendance est supposée ; on la vérifie en comparant tickets gagnés et tickets annoncés : un écart durable signalerait des chances surestimées.",
+    "Les sélections gagnent à peu près aussi souvent qu'annoncé (colonne 4) : les probabilités ne sont pas gonflées. Les tickets de favoris gagnent un peu plus souvent qu'annoncé (biais favori-outsider), ce que la correction apprise par stratégie prend en compte.",
+    "Provenance des cotes : historique = cotes Bet 365 réellement observées ramenées au niveau français (approximation × " + fr(T["tickets"]["frFactor"]["factor"], 3) + ") ; dernière colonne = même calcul sans approximation. En direct : cotes françaises collectées, double chance estimée (marquée *), cotes saisies (marquées). Aucun rendement présenté comme réel ne repose sur une cote théorique.",
+    "Ticket non admissible : si le meilleur ticket d'un niveau a une espérance sous −20 % (réglable), aucun ticket n'est affiché cette semaine-là, plutôt qu'un ticket forcé ; la stratégie reste suivie en fantôme."])
+
 story.append(PageBreak())
 story.append(P("8. Hypothèses", "h1"))
 story += bullets([
@@ -307,23 +350,35 @@ story.append(table([
     ["Discipline de mise", "Mises fixes ou Kelly fractionné ; jamais de mise pour se refaire.", "Nul"],
 ], [48 * mm, 82 * mm, 40 * mm]))
 
-story.append(P("11. Revue externe : où en est chaque recommandation", "h1"))
+story.append(P("11. Revue externe (deuxième audit) : état de chaque recommandation", "h1"))
 story.append(table([
     ["Recommandation", "État", "Ce qui a été fait / limite"],
-    ["Séparer apprentissage, validation, test final", "Fait", "Trois périodes ; le test final ne sert à aucun choix (ni réglage, ni stratégie, ni prudence)."],
-    ["Séparer modèle sportif et marché", "Fait", "Chaque sélection affiche marché sans marge, modèle seul et probabilité retenue ; log loss de chacun sur le test, avec IC."],
-    ["Drivers gratuits (xG, blessures, compositions)", "Partiel", "Pas de source gratuite et légale fiable pour 13 compétitions ; à rechercher, et à n'activer que s'ils améliorent la validation."],
-    ["Auditer les stratégies sans biais de sélection", "Fait", "Stratégie de départ choisie sur le passé ; le choix semaine par semaine est rejoué sans regarder l'avenir et mesuré sur le test."],
-    ["Contrôle automatique des 14 jours", "Fait", "Couverture par compétition à chaque cycle : analysés, cotes, résultats manquants, reports, doublons."],
-    ["Mesurer l'incertitude", "Fait", "Wilson (taux), bootstrap (rendements, écarts de log loss)."],
-    ["Paris réels sous contrôle manuel, tests séparés", "Fait", "Paris automatiques désactivés ; tickets saisis en « test » ou « réel », bilans séparés, tous audités."],
-    ["Historique immuable des prédictions", "Partiel", "La dernière prédiction avant le coup d'envoi est figée et conservée ; les versions intermédiaires ne sont pas gardées."],
-    ["Budget 0 €", "Respecté", "Offre gratuite The Odds API ; aucune source payante utilisée."],
-], [52 * mm, 20 * mm, 98 * mm]))
+    ["P1 · Sanctuariser la validation", "Opérationnel", "Test final figé au 16/10/2026 (référence) ; registre prospectif des prévisions réellement émises, évalué par horizon et par version avec IC. Fuites vérifiées dans le code : modèle, classements, buteurs et forme n'utilisent que les matchs antérieurs. Réserve : au Brésil, au Japon et en Suisse, l'historique ne fournit que la cote de clôture, connue au coup d'envoi seulement."],
+    ["P2 · Historiser toutes les prévisions", "Opérationnel", "Un instantané par horizon (J-14, J-7, J-3, J-1, J-0) et un au coup d'envoi, jamais réécrits. Les versions intermédiaires entre deux horizons ne sont pas gardées (volume)."],
+    ["P3 · Drivers gratuits", "Partiel", "Repos et congestion testés et rejetés (rien de démontré). Blessures et compositions : API-Football gratuite à tester (compte requis). xG : pas de source gratuite sans aspiration de site."],
+    ["P4 · Indépendance face aux bookmakers", "Opérationnel", "Chaque pronostic affiche modèle seul, marché, retenue, poids appliqué, écart et origine du choix ; une probabilité tirée du marché est dite comme telle."],
+    ["P5 · Tickets et corrélations", "Opérationnel", "Une sélection par match ; annoncé contre observé ; comparaison par nombre de sélections ; politique de choix rejouée sans regarder l'avenir ; « aucun ticket admissible » sous un seuil d'espérance."],
+    ["P6 · Cotes et rentabilité", "Opérationnel", "Provenance distinguée (collectée, historique Bet 365, reconstruite, estimée *, saisie) ; résultats refaits sans approximation."],
+    ["P7 · Couverture des 14 jours", "Partiel", "État par compétition (couverte, partielle, trêve, inactive), sources, résultats manquants, reports, doublons. Les changements d'horaire ne sont pas encore historisés."],
+    ["P8 · Automatisation", "À surveiller", "Deux passages par jour programmés ; la page signale désormais toute absence d'exécution réussie depuis plus de 14 h (une tâche programmée n'est pas une exécution réussie). Clé hors dépôt."],
+    ["P9 · Interface", "Partiel", "Légende et lexique, tri et filtres, détails à la demande. La navigation reste en 4 onglets ; un regroupement plus épuré est possible."],
+], [42 * mm, 24 * mm, 104 * mm]))
+story.append(P("Ce qui reste incomplet", "h2"))
+story += bullets([
+    "Aucun avantage prédictif démontré face au marché, ni sur l'historique ni (pour l'instant) en prospectif.",
+    "Blessures, compositions, xG et minutes des joueurs absents ; buteurs estimés à partir de la part de buts passée.",
+    "Pas de cote française gratuite pour les buteurs ; double chance estimée à partir du 1N2.",
+    "Historique de cotes françaises inexistant : rejeux par approximation (et refaits sans).",
+    "Le suivi prospectif démarre : plusieurs mois seront nécessaires pour des conclusions solides."])
+story.append(KeepTogether([P("Mini-guide", "h2")] + bullets([
+    "Pronostics : un choix par match sur 14 jours. Trie et filtre (cote, probabilité, espérance, fiabilité) ; le bouton (i) montre d'où vient la probabilité et toutes les sélections du match, avec une case pour saisir la cote que tu vois.",
+    "Tickets : quatre niveaux chaque semaine à partir du jeudi, avec la chance, l'espérance et le pourquoi. « Enregistrer ce ticket » le range dans « Mes tickets », en test ou en réel.",
+    "Performance : suivi prospectif, désaccords modèle / marché, stratégies de tickets, CLV, entraînement.",
+    "Légende et lexique en bas de chaque page ; rien à faire au quotidien, tout se met à jour seul deux fois par jour."])))
 
 story.append(P("12. Architecture technique", "h1"))
 story.append(P("Le code est sur GitHub (dépôt privé IsoTheOnly/football-quant-ai). La page est un fichier HTML autonome (React), publiée comme artefact Claude ; sa base de données partagée stocke l'état. "
-               "Un exécuteur Node (src/runner.js) fait tourner le même moteur que la page. 30 tests automatiques couvrent le moteur, les données, les cotes, les règlements, la CLV, un cycle complet et le rendu de la page. "
+               "Un exécuteur Node (src/runner.js) fait tourner le même moteur que la page. 35 tests automatiques couvrent le moteur, les données, les cotes, les règlements, la CLV, un cycle complet et le rendu de la page. "
                "Fichiers principaux : src/engine.js (modèle), src/etl2.js (données), src/train2.js (entraînement), src/autopilot.js (pronostics, tickets, apprentissage), src/app.js (interface).", "small"))
 story.append(Spacer(1, 6))
 story.append(P("Avertissement : outil personnel d'aide à la décision. Aucune rentabilité n'est garantie ; ne pariez que ce que vous pouvez perdre. Aide : joueurs-info-service.fr — 09 74 75 13 13.", "small"))

@@ -275,3 +275,48 @@ test("intervalles de confiance : Wilson et bootstrap", () => {
   const b = FQ.T.bootRoi([1, -1, 1, -1, 1, -1, 1, -1]);
   assert.ok(b[0] < 0 && b[1] > 0);
 });
+
+test("journal des prévisions : un instantané par horizon, jamais réécrit, puis évalué", () => {
+  const ko = Date.now() + 4 * 864e5; // dans 4 jours → horizon J-3
+  const d = new Date(ko).toISOString().slice(0, 10), t = new Date(ko).toISOString().slice(11, 16);
+  const m = match({ id: "F1", date: d, time: t + " UTC+0" });
+  const s = FQ.emptyState();
+  const pred = { id: "p1", matchId: "F1", createdAt: new Date().toISOString(), markets: { p1: 0.5, pN: 0.3, p2: 0.2 }, modelMarkets: { p1: 0.45, pN: 0.3, p2: 0.25 }, blend: { w: 0, market: [0.5, 0.3, 0.2], src: "Bet 365" }, pick: { market: "1N2", sel: "1", odds: 1.9, kind: "proba" }, reliability: 70 };
+  s.predictions = [pred];
+  const ctx = ctxFor([m], s);
+  assert.equal(P.logForecasts(ctx), 1);
+  assert.equal(P.logForecasts(ctx), 0, "pas de doublon pour le même horizon");
+  const row = s.forecastLog[0];
+  assert.equal(row[4], "J-3");
+  assert.deepEqual(row[7], [450, 300, 250]); assert.deepEqual(row[8], [500, 300, 200]); assert.equal(row[10], 0);
+  // nouvelle prévision : la ligne existante n'est pas modifiée
+  s.predictions.push(Object.assign({}, pred, { id: "p2", markets: { p1: 0.6, pN: 0.25, p2: 0.15 } }));
+  P.logForecasts(ctx);
+  assert.deepEqual(s.forecastLog[0][9], [500, 300, 200]);
+  s.results = { F1: { hg: 2, ag: 0 } };
+  const ev = P.forecastEval(s);
+  const b = ev.buckets.find((x) => x.b === "J-3");
+  assert.equal(b.n, 1); assert.ok(Math.abs(b.llF + Math.log(0.5)) < 1e-9); assert.ok(Math.abs(b.llM + Math.log(0.45)) < 1e-9); assert.equal(b.acc, 1);
+  assert.equal(P.flBucket(300), "J-14"); assert.equal(P.flBucket(30), "J-1"); assert.equal(P.flBucket(3), "J-0");
+});
+
+test("couverture : une compétition configurée sans match n'est pas présentée comme couverte", () => {
+  const cov = P.coverageReport(ctxFor([match({ id: "A", date: "2026-10-18" })], Object.assign(FQ.emptyState(), { predictions: [{ matchId: "A", markets: { p1: 0.5, pN: 0.3, p2: 0.2 } }] })));
+  assert.equal(cov.comps.FL1.status, "couverte");
+  assert.equal(cov.comps.WC.status, "aucune donnée");
+});
+
+test("ticket non admissible : sous l'espérance minimale, aucun ticket affiché, fantômes toujours suivis", () => {
+  const r = raw(); const today = "2026-10-16";
+  const matches = FQ.buildMatches(FQ.ETL.build(r), today);
+  FQ.TRAINED = TRAINED;
+  const state = FQ.emptyState(); state.schemaData = 2; state.settings.ticketEvFloor = 0.5; // impossible à atteindre
+  const cache = new Map();
+  const ctx = { mode: "real", state, matches, matchById: new Map(matches.map((m) => [m.id, m])), today, rulesMap: FQ.RULES,
+    getModel: (c, d) => { const k = c + d; if (!cache.has(k)) cache.set(k, FQ.fitModel(matches, c, d)); return cache.get(k); }, dataVersion: (c) => c, dataAgeDays: 1 };
+  P.runCycle(ctx, "test");
+  assert.equal(state.paperTickets.length, 0);
+  assert.ok(Object.values(state.ticketSkip || {}).some((x) => /sous le seuil/.test(x.reason)));
+  assert.ok((state.shadowTickets || []).length > 0);
+  assert.ok((state.forecastLog || []).length > 50, "journal des prévisions alimenté par le cycle");
+});

@@ -50,3 +50,11 @@ test("entraînement embarqué : apprentissage strictement antérieur à la péri
   const p = TRAINED.protocol;
   assert.ok(p.trainFrom < p.trainTo && p.trainTo <= p.testFrom, JSON.stringify(p));
 });
+
+test("test final figé : la référence historique ne bouge plus", () => {
+  assert.equal(FQ.T.FROZEN_TEST_TO, "2026-10-16");
+  assert.equal(TRAINED.protocol.testTo, FQ.T.FROZEN_TEST_TO);
+  const ref = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "..", "data", "reference_test_2026-10-16.json"), "utf8"));
+  assert.equal(ref.protocol.testTo, "2026-10-16");
+  assert.ok(Math.abs(ref.summary0.testLLFinal - TRAINED.summary0.testLLFinal) < 1e-9, "le réentraînement ne doit pas changer la référence");
+});

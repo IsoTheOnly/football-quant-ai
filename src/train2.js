@@ -20,6 +20,11 @@
   const sum = (a) => a.reduce((x, y) => x + y, 0);
   const mean = (a, f) => (a.length ? sum(a.map(f)) / a.length : null);
 
+  /**
+   * Fin du test final, figée le 16/10/2026 : ce test a été consulté pendant le développement, il devient la référence historique.
+   * Les matchs suivants sont évalués à part (« après le gel ») et, surtout, par le journal des prévisions réellement émises.
+   */
+  T.FROZEN_TEST_TO = "2026-10-16";
   T.GRID = [];
   for (const hl of [120, 240, 400]) for (const pm of [2, 6]) for (const pr of [0, 0.2]) T.GRID.push({ halfLifeDays: hl, priorMatches: pm, promotedAtt: -pr, promotedDef: pr });
 
@@ -40,7 +45,7 @@
         const o = m.odds && m.odds.h ? [m.odds.h, m.odds.d, m.odds.a] : null;
         const c = m.close && m.close.h ? [m.close.h, m.close.d, m.close.a] : null;
         rows.push({ id: m.id, comp, date: d, home: m.home, away: m.away, p3: [pr.markets.p1, pr.markets.pN, pr.markets.p2], pB: pr.markets.bttsYes,
-          k: m.hg > m.ag ? 0 : m.hg === m.ag ? 1 : 2, bt: m.hg > 0 && m.ag > 0 ? 1 : 0, rel: FQ.reliability(model, m, {}).score, o, c,
+          k: m.hg > m.ag ? 0 : m.hg === m.ag ? 1 : 2, bt: m.hg > 0 && m.ag > 0 ? 1 : 0, rel: FQ.reliability(model, m, {}).score, rho: pr.rho, o, c,
           oIsClose: !!(m.odds && /clôture/.test(m.odds.src || "")), lh: pr.lambdaHome, la: pr.lambdaAway,
           pO: U2.isNum(pr.markets.over25) ? pr.markets.over25 : null, ou: m.ou25 ? [m.ou25.o, m.ou25.u] : null, t: m.hg + m.ag > 2 ? 1 : 0 });
       }
@@ -276,7 +281,8 @@
     const t0 = Date.now();
     const out = { generatedAt: new Date().toISOString(), engineVersion: FQ.ENGINE_VERSION,
       protocol: { trainFrom: o.trainFrom, valFrom: o.valFrom, trainTo: o.trainTo, testFrom: o.trainTo, testTo: o.testTo, grid: o.grid ? T.GRID.length : 1,
-        note: "Trois périodes chronologiques : apprentissage (ajustement), validation (décide si un réglage est gardé), test final (mesuré seulement, jamais utilisé pour choisir). Pour chaque date, seuls les matchs antérieurs servent au calcul." },
+        frozen: o.testTo === T.FROZEN_TEST_TO,
+        note: "Trois périodes chronologiques : apprentissage (ajustement), validation (décide si un réglage est gardé), test final (référence historique figée au 16/10/2026, mesurée seulement, jamais utilisée pour choisir). Les matchs suivants sont suivis par le journal des prévisions réellement émises. Pour chaque date, seuls les matchs antérieurs servent au calcul." },
       leagues: {}, calibration: null, policy: null, picks: null, qprior: {}, summary: {} };
     const train = [], val = [], test = [];
     const obj = (sc) => sc.ll1N2 + 0.5 * sc.llBTTS;
@@ -396,6 +402,15 @@
       oddsOf(r) ? { p3: FQ.blend(r.p3, oddsOf(r), wOf(r.comp), M).p3 } : {},
       r.ou && U2.isNum(r.pO) ? { pO: gW * r.pO + (1 - gW) * two(r.ou) } : {}));
     const trainB = blendRows(fitC), valB = blendRows(valC), testB = blendRows(testC);
+    // après le gel du test : même modèle, matchs jamais vus pendant le développement (information, aucun choix n'en dépend)
+    if (o.postTo && o.postTo > o.testTo) {
+      const post = [];
+      for (const comp of Object.keys(out.leagues)) post.push(...predictRange(matches, comp, o.testTo, o.postTo, out.leagues[comp].params || {}));
+      const pB = blendRows(calRows(post)).filter(oddsOf);
+      out.post = { from: o.testTo, to: o.postTo, n: pB.length, llFinal: pB.length ? mean(pB, (r) => FQ.metrics.logLoss3(r.p3, r.k)) : null,
+        llMarket: pB.length ? mean(pB, (r) => FQ.metrics.logLoss3(r.pK3, r.k)) : null, llModel: pB.length ? mean(pB, (r) => FQ.metrics.logLoss3(r.pM3, r.k)) : null };
+      o.onLog(`Après le gel (${o.testTo} → ${o.postTo}) : ${pB.length} matchs cotés`);
+    }
     out.summary0 = { trainLLFinal: mean(trainB.filter(oddsOf), (r) => FQ.metrics.logLoss3(r.p3, r.k)), valLLFinal: mean(valB.filter(oddsOf), (r) => FQ.metrics.logLoss3(r.p3, r.k)), testLLFinal: mean(testB.filter(oddsOf), (r) => FQ.metrics.logLoss3(r.p3, r.k)),
       testMarketLL: mean(testB.filter(oddsOf), (r) => FQ.metrics.logLoss3(r.pK3, r.k)), testModelLL: mean(testB.filter(oddsOf), (r) => FQ.metrics.logLoss3(r.pM3, r.k)), testN: testB.filter(oddsOf).length };
     // écart de log loss (retenu − marché) sur le test : IC bootstrap par match, pour savoir si la différence est réelle
@@ -494,7 +509,9 @@
         const banditOut = Object.assign({ procs }, procs.corrected.test);
         const T0 = arms[start].test;
         o.onLog(`Tickets ${sc.label} : départ ${start} (passé ${arms[start].train.won}/${arms[start].train.n}, test ${T0.won}/${T0.n}) ; choix corrigé passé ${procs.corrected.past.won}/${procs.corrected.past.n} test ${procs.corrected.test.won}/${procs.corrected.test.n} ; choix par taux passé ${procs.hitrate.past.won}/${procs.hitrate.past.n} test ${procs.hitrate.test.won}/${procs.hitrate.test.n}`);
-        return { id: sc.id, label: sc.label, lo: sc.lo, hi: sc.hi, start, bandit: banditOut,
+        // robustesse à l'approximation des cotes françaises : même stratégie aux cotes Bet 365 brutes (cotes historiques réellement observées)
+        const raw = { train: strip2(armBacktest(trainB, sc, arms0.find((a) => a.id === start), { factor: 1 }, s, kappa)), test: strip2(armBacktest(testB, sc, arms0.find((a) => a.id === start), { factor: 1 }, s, kappa)) };
+        return { id: sc.id, label: sc.label, lo: sc.lo, hi: sc.hi, start, bandit: banditOut, rawOdds: raw,
           arms: Object.fromEntries(Object.entries(arms).map(([k, v]) => [k, { train: strip2(v.train), val: strip2(v.val), test: strip2(v.test), weeks: v.train.weeks.concat(v.test.weeks) }])),
           benchmark: { train: strip2(bench.train), test: strip2(bench.test) } };
       }), note: "Un ticket par stratégie, par niveau et par semaine (matchs du jeudi au dimanche). Cotes d'avant-match football-data.co.uk (1N2, ±2,5 buts) ramenées au niveau des bookmakers français (facteur mesuré), double chance déduite du 1N2, mise 1 u. Stratégie de départ et prudence choisies sur le passé ; le test final n'a servi à aucun choix. « Les deux équipes marquent » n'a pas d'historique de cotes : ce marché n'entre qu'en réel." };

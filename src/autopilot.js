@@ -906,10 +906,23 @@
       const key = win.week + "|" + sc.id;
       const mine = s.paperTickets.find((t) => t.scenario === sc.id && t.week === win.week);
       if (mine && (mine.frozen || mine.status !== "EN ATTENTE")) continue; // ticket de la semaine déjà engagé
-      const choice = pickArm(ctx, sc, armTk);
+      // admissibilité : seules les stratégies dont le ticket a une espérance au-dessus du seuil peuvent être jouées ;
+      // si aucune ne l'atteint, pas de ticket affiché (on ne fabrique pas un ticket coûte que coûte)
+      const floor = U.isNum(s.settings.ticketEvFloor) ? s.settings.ticketEvFloor : -0.2;
+      s.ticketSkip = s.ticketSkip || {};
+      const okTk = Object.fromEntries(Object.entries(armTk).filter(([, t]) => U.isNum(t.ev) && t.ev >= floor));
+      const fresh = Object.values(armTk).filter((t) => !t.stub);
+      if (fresh.length && !Object.values(okTk).some((t) => !t.stub)) {
+        const bestBad = fresh.reduce((a, t) => (t.ev > a.ev ? t : a), fresh[0]);
+        s.ticketSkip[key] = { at: now, reason: `meilleur ticket trouvé : cote ${f2(bestBad.totalOdds)}, chance ${pc1(bestBad.pJoint)}, espérance ${Math.round(100 * bestBad.ev)} %, sous le seuil de ${Math.round(100 * floor)} % (Paramètres)` };
+        if (mine) s.paperTickets.splice(s.paperTickets.indexOf(mine), 1);
+        continue;
+      }
+      delete s.ticketSkip[key];
+      const choice = pickArm(ctx, sc, okTk);
       const arm = choice ? choice.arm : null;
       if (choice) s.armChoice[key] = { arm: arm.id, reason: choice.reason, at: now, stats: choice.stats };
-      const tk = arm ? armTk[arm.id] : null;
+      let tk = arm ? armTk[arm.id] : null;
       if (!tk) { if (mine && mine.legs.some((l) => !cands.some((c) => c.matchId === l.matchId))) s.paperTickets.splice(s.paperTickets.indexOf(mine), 1); continue; }
       const legs = tk.legs.map(legOfCand);
       const why = ticketWhy(tk, sc, arm, choice, armTk);
@@ -960,10 +973,14 @@
     return scenarios(ctx.state.settings).map((sc) => {
       const armTk = {};
       for (const a of allowedArms(ctx.state.settings)) { const t = f.find(a, sc); if (t) armTk[a.id] = t; }
-      const c = pickArm(ctx, sc, armTk) || { arm: TICKET_ARMS[0], reason: "" };
-      const tk = armTk[c.arm.id] || null;
+      const floor = U.isNum(ctx.state.settings.ticketEvFloor) ? ctx.state.settings.ticketEvFloor : -0.2;
+      const okTk = Object.fromEntries(Object.entries(armTk).filter(([, t]) => t.ev >= floor));
+      const all = Object.values(armTk), bestBad = all.length ? all.reduce((a, t) => (t.ev > a.ev ? t : a), all[0]) : null;
+      const skip = all.length && !Object.keys(okTk).length ? { reason: `meilleur ticket trouvé : cote ${f2(bestBad.totalOdds)}, chance ${pc1(bestBad.pJoint)}, espérance ${Math.round(100 * bestBad.ev)} %, sous le seuil de ${Math.round(100 * floor)} % (Paramètres)` } : null;
+      const c = pickArm(ctx, sc, okTk) || { arm: TICKET_ARMS[0], reason: "" };
+      const tk = okTk[c.arm.id] || null;
       if (tk) tk.legs = tk.legs.map(legOfCand);
-      return { sc, rule: c.arm.label, strategy: c.arm.id, reason: c.reason, why: tk ? ticketWhy(tk, sc, c.arm, c, armTk) : null, ticket: tk, bookName: tk && tk.book ? FR_NAMES()[tk.book] : null, nCands: cands.filter((x) => x.top).length, nMatches: new Set(cands.map((x) => x.matchId)).size, win };
+      return { sc, skip, rule: c.arm.label, strategy: c.arm.id, reason: c.reason, why: tk ? ticketWhy(tk, sc, c.arm, c, armTk) : null, ticket: tk, bookName: tk && tk.book ? FR_NAMES()[tk.book] : null, nCands: cands.filter((x) => x.top).length, nMatches: new Set(cands.map((x) => x.matchId)).size, win };
     });
   }
 
@@ -1021,6 +1038,94 @@
     return added;
   }
 
+  /* ----------------------------------------------- journal des prévisions (jamais réécrit) */
+  /**
+   * Un instantané par match et par horizon (J-14, J-7, J-3, J-1, J-0), pris la première fois que le match entre dans l'horizon,
+   * plus un instantané « KO » : la dernière prévision émise avant le coup d'envoi. Les lignes ne sont jamais modifiées.
+   * Ligne (tableau compact) : [0 match, 1 comp, 2 coup d'envoi, 3 émise le, 4 horizon, 5 heures avant, 6 version,
+   *   7 modèle seul 1/N/2 (‰), 8 marché sans marge (‰) ou null, 9 retenue (‰), 10 poids du modèle, 11 choix, 12 cote du choix,
+   *   13 type de choix, 14 fiabilité, 15 source de la cote, 16 inclusion (niveaux de ticket ; R réel, T test)]
+   */
+  const FL_BUCKETS = [["J-14", 240], ["J-7", 120], ["J-3", 48], ["J-1", 12], ["J-0", 0]];
+  const FL_KEEP_DAYS = 120;
+  const flBucket = (h) => { for (const [k, t] of FL_BUCKETS) if (h >= t) return k; return "J-0"; };
+  const r3 = (a) => (a && a.every(U.isNum) ? a.map((x) => Math.round(1000 * x)) : null);
+  const modelVersion = () => `${FQ.ENGINE_VERSION}/${((FQ.TRAINED && FQ.TRAINED.generatedAt) || "").slice(0, 10)}`;
+  function flRow(m, p, koMs, bucket, inc) {
+    const mk = p.markets, pf = [mk.p1, mk.pN, mk.p2];
+    const pm = p.modelMarkets ? [p.modelMarkets.p1, p.modelMarkets.pN, p.modelMarkets.p2] : pf;
+    const pk = p.blend && p.blend.market ? p.blend.market : null;
+    const h = Math.round(((koMs - Date.parse(p.createdAt)) / 3600e3) * 10) / 10;
+    const pick = p.pick || {};
+    return [m.id, m.comp, new Date(koMs).toISOString().slice(0, 16), String(p.createdAt).slice(0, 16), bucket, h, modelVersion(), r3(pm), r3(pk), r3(pf),
+      p.blend && U.isNum(p.blend.w) ? p.blend.w : pk ? null : 1, pick.market ? pick.market + "|" + pick.sel : null, U.isNum(pick.odds) ? pick.odds : null, pick.kind || null, p.reliability,
+      pick.oddsSrc ? String(pick.oddsSrc).split(" · relevée")[0].slice(0, 40) : null, inc || ""];
+  }
+  function logForecasts(ctx) {
+    const s = ctx.state, nowMs = Date.now();
+    s.forecastLog = s.forecastLog || [];
+    const have = new Set(s.forecastLog.map((r) => r[0] + "|" + r[4]));
+    const lastPred = new Map(); for (const p of s.predictions) if (p.markets && !p.slim) lastPred.set(p.matchId, p);
+    let added = 0;
+    for (const [id, p] of lastPred) {
+      const m = ctx.matchById ? ctx.matchById.get(id) : ctx.matches.find((x) => x.id === id);
+      if (!m) continue;
+      const ko = FQ.time.kickoffUtc(m.date, m.time, m.tz); if (!ko) continue;
+      if (nowMs < ko) {
+        const b = flBucket((ko - nowMs) / 3600e3);
+        if (!have.has(id + "|" + b) && Date.parse(p.createdAt) <= nowMs) { s.forecastLog.push(flRow(m, p, ko, b, "")); have.add(id + "|" + b); added++; }
+      } else if (nowMs - ko < 4 * 864e5 && !have.has(id + "|KO") && Date.parse(p.createdAt) < ko) {
+        // dernière prévision émise avant le coup d'envoi, avec son inclusion dans les tickets
+        const inc = [];
+        for (const t of s.paperTickets || []) if (t.legs.some((l) => l.matchId === id)) inc.push(t.scenario);
+        for (const t of s.realBets || []) if ((t.legs || []).some((l) => l.matchId === id)) inc.push(isRealBet(t) ? "R" : "T");
+        s.forecastLog.push(flRow(m, p, ko, "KO", [...new Set(inc)].join(","))); have.add(id + "|KO"); added++;
+      }
+    }
+    // rétention : les lignes de plus de FL_KEEP_DAYS jours passent dans les totaux archivés (l'évaluation reste complète)
+    const cut = new Date(nowMs - FL_KEEP_DAYS * 864e5).toISOString().slice(0, 16);
+    const old = s.forecastLog.filter((r) => r[2] < cut);
+    if (old.length) {
+      s.forecastArchive = s.forecastArchive || {};
+      for (const r of old) { const e = flEvalRow(s, r); if (e) addAgg(s.forecastArchive, r[4], e); }
+      s.forecastLog = s.forecastLog.filter((r) => r[2] >= cut);
+    }
+    return added;
+  }
+  /** Résultat et pertes d'une ligne du journal (null si pas encore de résultat) */
+  function flEvalRow(s, r) {
+    const res = s.results && s.results[r[0]];
+    if (!res || !U.isNum(res.hg) || res.status === "REPORTÉ" || res.status === "ANNULÉ") return null;
+    const k = res.hg > res.ag ? 0 : res.hg === res.ag ? 1 : 2;
+    const l = (a) => (a ? -Math.log(Math.max(1e-6, a[k] / 1000)) : null);
+    const f = r[9], top = f.indexOf(Math.max(...f));
+    return { k, llF: l(r[9]), llM: l(r[7]), llK: l(r[8]), acc: top === k ? 1 : 0 };
+  }
+  function addAgg(agg, b, e) {
+    const a = (agg[b] = agg[b] || { n: 0, llF: 0, llM: 0, nK: 0, llK: 0, llFK: 0, acc: 0 });
+    a.n++; a.llF += e.llF; a.llM += e.llM; a.acc += e.acc;
+    if (e.llK !== null) { a.nK++; a.llK += e.llK; a.llFK += e.llF; }
+  }
+  /**
+   * Suivi prospectif : prévisions réellement émises avant les matchs, évaluées par horizon (et par version pour « KO ») :
+   * log loss retenue / modèle seul / marché sur les mêmes matchs, écart retenu − marché avec IC bootstrap (lignes encore détaillées).
+   */
+  function forecastEval(s) {
+    const agg = JSON.parse(JSON.stringify(s.forecastArchive || {})), diffs = {}, byVer = {};
+    for (const r of s.forecastLog || []) {
+      const e = flEvalRow(s, r); if (!e) continue;
+      addAgg(agg, r[4], e);
+      if (e.llK !== null) (diffs[r[4]] = diffs[r[4]] || []).push(e.llF - e.llK);
+      if (r[4] === "KO") addAgg(byVer, r[6], e);
+    }
+    const order = FL_BUCKETS.map((x) => x[0]).concat(["KO"]);
+    const fmt = (a, d) => ({ n: a.n, llF: a.llF / a.n, llM: a.llM / a.n, acc: a.acc / a.n, nK: a.nK, llK: a.nK ? a.llK / a.nK : null, llFK: a.nK ? a.llFK / a.nK : null,
+      diff: d && d.length ? { mean: d.reduce((x, y) => x + y, 0) / d.length, ci: FQ.T && FQ.T.bootRoi ? FQ.T.bootRoi(d, 500) : null, n: d.length } : null });
+    return { rows: (s.forecastLog || []).length, since: (s.forecastLog || []).reduce((a, r) => (!a || r[3] < a ? r[3] : a), null),
+      buckets: order.filter((b) => agg[b] && agg[b].n).map((b) => Object.assign({ b }, fmt(agg[b], diffs[b]))),
+      versions: Object.entries(byVer).map(([v, a]) => Object.assign({ v }, fmt(a, null))) };
+  }
+
   /* ----------------------------------------------- contrôle de couverture (14 jours) */
   /**
    * Chaque cycle, par compétition : matchs à venir sur 14 jours, analysés, avec cote française / une cote ;
@@ -1031,7 +1136,8 @@
     const norm = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
     const lastPred = new Map(); for (const p of s.predictions) lastPred.set(p.matchId, p);
     const comps = {}, issues = [], seen = new Map();
-    const C = (c) => (comps[c] = comps[c] || { up: 0, analysed: 0, fr: 0, odds: 0, soon: 0, soonOdds: 0, missingRes: 0, postponed: 0, dup: 0, lastResult: null, next: null });
+    const C = (c) => (comps[c] = comps[c] || { up: 0, analysed: 0, fr: 0, odds: 0, b365: 0, soon: 0, soonOdds: 0, missingRes: 0, postponed: 0, dup: 0, lastResult: null, next: null, sources: {} });
+    for (const c of COVERED_COMPS) C(c);
     const name = (m) => `${m.home} – ${m.away} (${m.date})`;
     for (const m of ctx.matches) {
       const c = C(m.comp);
@@ -1049,13 +1155,21 @@
       if (pr && pr.markets) c.analysed++;
       else issues.push({ comp: m.comp, kind: "non analysé", text: `${name(m)} : pas de pronostic (historique insuffisant pour une des équipes, ou match ajouté depuis le dernier calcul)` });
       const fr = !!(m.oddsFr && m.oddsFr.books && Object.keys(m.oddsFr.books).length), any = fr || !!(m.odds && m.odds.h);
-      if (fr) c.fr++; if (any) c.odds++;
+      if (fr) c.fr++; if (any) c.odds++; if (m.odds && m.odds.h && /Bet 365/.test(m.odds.src || "")) c.b365++;
+      const src = String(m.source || "—").split(/ \(| ·/)[0]; c.sources[src] = (c.sources[src] || 0) + 1;
       if (U.daysBetween(today, m.date) <= 2) { c.soon++; if (any) c.soonOdds++; else issues.push({ comp: m.comp, kind: "sans cote", text: `${name(m)} : à moins de 3 jours et aucune cote relevée` }); }
+    }
+    // une compétition configurée n'est pas forcément couverte : statut explicite
+    for (const [k, c] of Object.entries(comps)) {
+      c.status = c.up === 0 ? (c.lastResult && U.daysBetween(c.lastResult, today) <= 21 ? "aucun match dans les 14 jours (trêve ?)" : "inactive (saison terminée ou pas encore commencée)")
+        : c.analysed < c.up ? "partielle" : "couverte";
+      if (c.up === 0 && !c.lastResult) c.status = "aucune donnée";
     }
     const tot = Object.values(comps).reduce((a, c) => { for (const k of ["up", "analysed", "fr", "odds", "missingRes", "postponed", "dup", "soon", "soonOdds"]) a[k] = (a[k] || 0) + c[k]; return a; }, {});
     return { at: new Date().toISOString(), from: today, to: end, comps, totals: tot, issues: issues.slice(0, 80), nIssues: issues.length };
   }
 
+  const COVERED_COMPS = ["PL", "PD", "FL1", "SA", "BL1", "DED", "ELC", "BSA", "J1", "SSL", "SPL", "CL", "WC"];
   /** Paris saisis par Iso : « test » (simulation, par défaut) ou « réel » (vraiment joué). Les anciens paris sont des tests. */
   const isRealBet = (b) => !!b && b.mode === "reel";
   function migrateBets(s) { let n = 0; for (const b of s.realBets || []) if (b.mode !== "reel" && b.mode !== "test") { b.mode = "test"; n++; } return n; }
@@ -1150,6 +1264,7 @@
     updateTickets(ctx, rep);
     rep.clv = updateClv(ctx);
     rep.journal = updateJournal(ctx);
+    rep.forecasts = logForecasts(ctx);
     s.coverage = coverageReport(ctx); rep.coverageIssues = s.coverage.nIssues;
     rep.ticketsChanged = tkBefore !== JSON.stringify((s.paperTickets || []).map((t) => [t.id, t.status, t.updatedAt, t.frozen]).concat((s.realBets || []).map((t) => [t.id, t.status])));
     // 5. apprentissage
@@ -1165,7 +1280,7 @@
     if (allowBets && !rows.length && open.length === 0 && s.opportunities.some((o) => o.status === "ouverte" && !Number.isFinite(o.odds) && !o.insufficient)) rep.notes.push("Aucune cote disponible : probabilités, cotes justes et cotes minimales publiées, aucun pari engagé.");
     rep.compacted = compactState(s, ctx.today);
     rep.ms = Date.now() - t0;
-    rep.changed = rep.audited + rep.analysed + rep.insufficient + rep.autoBets + rep.closed + rep.compacted + (rep.clv || 0) + (rep.journal || 0) > 0 || !!rep.calibration || rep.ticketsChanged;
+    rep.changed = rep.audited + rep.analysed + rep.insufficient + rep.autoBets + rep.closed + rep.compacted + (rep.clv || 0) + (rep.journal || 0) + (rep.forecasts || 0) > 0 || !!rep.calibration || rep.ticketsChanged;
     if (rep.changed) {
       s.autoLog = (s.autoLog || []).concat([rep]).slice(-80);
     }
@@ -1177,6 +1292,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+  FQ.P = { logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
     SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

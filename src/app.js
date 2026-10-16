@@ -1328,6 +1328,9 @@ window.__fqStartApp = function () {
       <p className="tiny muted mt-1">Marché = cotes sans marge ; modèle seul = notre modèle sportif sans les cotes (en orange quand il s'écarte de 8 points ou plus : estimation moins sûre). « Intéressant dès » : cote minimale pour une espérance d'au moins ${Math.round(100 * evMin)} % selon nos probabilités. Saisis la cote que tu vois (même boostée) : l'espérance se recalcule et la sélection peut entrer dans les tickets. * = cote estimée (double chance déduite du 1N2).</p></div>`;
   }
 
+  /** Filtres et tri des pronostics (mémorisés dans ce navigateur) */
+  const PICK_SORTS = [["time", "Heure du match"], ["oddsDesc", "Cote décroissante"], ["oddsAsc", "Cote croissante"], ["pDesc", "Probabilité décroissante"], ["pAsc", "Probabilité croissante"], ["evDesc", "Espérance décroissante"], ["relDesc", "Fiabilité décroissante"]];
+  const PICK_F0 = { sort: "time", scope: "day", market: "ALL", oddsMin: null, oddsMax: null, pMin: null, onlyOdds: false, onlyValue: false };
   function MatchPicks({ ctx }) {
     const { state, today } = ctx;
     const H = state.settings.horizonDays || 14;
@@ -1335,21 +1338,52 @@ window.__fqStartApp = function () {
     const [comp, setComp] = useState("ALL");
     const [day, setDay] = useState(null);
     const [open, setOpen] = useState(null);
-    const openPicks = (state.picks || []).filter((p) => p.status === "EN ATTENTE" && (comp === "ALL" || p.comp === comp));
+    const [f, setF0] = useState(() => { try { return Object.assign({}, PICK_F0, JSON.parse(P.pref("picksFilter") || "{}")); } catch (e) { return Object.assign({}, PICK_F0); } });
+    const setF = (patch) => setF0((cur) => { const nx = Object.assign({}, cur, patch); try { P.pref("picksFilter", JSON.stringify(nx)); } catch (e) {} return nx; });
+    const nFilters = ["market", "oddsMin", "oddsMax", "pMin", "onlyOdds", "onlyValue"].filter((k) => f[k] !== PICK_F0[k] && f[k] !== null && f[k] !== "").length;
+    const allOpen = (state.picks || []).filter((p) => p.status === "EN ATTENTE" && (comp === "ALL" || p.comp === comp));
+    const openPicks = allOpen.filter((p) => (f.market === "ALL" || p.market === f.market) && (!f.onlyOdds || Number.isFinite(p.odds)) && (!f.onlyValue || p.kind === "value")
+      && (!(f.oddsMin > 1) || (Number.isFinite(p.odds) && p.odds >= f.oddsMin)) && (!(f.oddsMax > 1) || (Number.isFinite(p.odds) && p.odds <= f.oddsMax)) && (!(f.pMin > 0) || p.p >= f.pMin / 100));
     const byDay = {}; openPicks.forEach((p) => { (byDay[p.date] = byDay[p.date] || []).push(p); });
     const d = day && byDay[day] ? day : days.find((x) => byDay[x]) || today;
     const kickMs = (p) => { const m = ctx.matchById.get(p.matchId); return (m && FQ.time.kickoffUtc(m.date, m.time, m.tz)) || 0; };
-    const list = (byDay[d] || []).slice().sort((a, b) => kickMs(a) - kickMs(b) || (a.comp < b.comp ? -1 : 1));
+    const num = (x, dflt) => (Number.isFinite(x) ? x : dflt);
+    const cmp = {
+      time: (a, b) => kickMs(a) - kickMs(b) || (a.comp < b.comp ? -1 : 1),
+      oddsDesc: (a, b) => num(b.odds, -1) - num(a.odds, -1), oddsAsc: (a, b) => num(a.odds, 1e9) - num(b.odds, 1e9),
+      pDesc: (a, b) => b.p - a.p, pAsc: (a, b) => a.p - b.p,
+      evDesc: (a, b) => num(b.odds ? b.p * b.odds - 1 : null, -9) - num(a.odds ? a.p * a.odds - 1 : null, -9), relDesc: (a, b) => (b.rel || 0) - (a.rel || 0),
+    }[f.sort] || ((a, b) => kickMs(a) - kickMs(b));
+    const all = f.scope === "all";
+    const list = (all ? openPicks : byDay[d] || []).slice().sort((a, b) => cmp(a, b) || kickMs(a) - kickMs(b));
     const inSlip = new Set(ctx.slip.map((x) => x.matchId));
     const comps = COMP_ORDER.filter((c) => (state.picks || []).some((p) => p.status === "EN ATTENTE" && p.comp === c));
     const total = openPicks.length;
-    return html`<${Card} eyebrow=${`Pronostics · ${H} prochains jours · ${total} matchs`} title="Un choix par match" right=${html`<select className="inp" aria-label="Compétition" value=${comp} onChange=${(e) => setComp(e.target.value)}><option value="ALL">Toutes les compétitions</option>${comps.map((c) => html`<option key=${c} value=${c}>${COMP[c].name}</option>`)}</select>`}>
-      <div className="daybar" role="tablist" aria-label="Jour">${days.map((x) => { const n = (byDay[x] || []).length; return html`<button key=${x} role="tab" aria-selected=${x === d} className=${"dayb" + (x === d ? " on" : "") + (n ? "" : " off")} disabled=${!n} onClick=${() => setDay(x)}>
-        <span className="dw">${x === today ? "auj." : new Date(x + "T12:00:00Z").toLocaleDateString("fr-FR", { weekday: "short" })}</span><span className="dn">${+x.slice(8)}</span><span className="dc">${n || "·"}</span></button>`; })}</div>
-      <div className="day-h"><b className="cap">${dayLabel(d, today)}</b> <span className="muted small">· ${list.length} match${list.length > 1 ? "s" : ""}</span></div>
-      ${!list.length ? html`<${Empty} icon="CalendarX">Aucun match analysé ce jour-là${comp !== "ALL" ? " dans cette compétition" : ""}.<//>` :
+    return html`<${Card} eyebrow=${`Pronostics · ${H} prochains jours · ${total} match${total > 1 ? "s" : ""}${total < allOpen.length ? ` sur ${allOpen.length} (filtrés)` : ""}`} title="Un choix par match" right=${html`<select className="inp" aria-label="Compétition" value=${comp} onChange=${(e) => setComp(e.target.value)}><option value="ALL">Toutes les compétitions</option>${comps.map((c) => html`<option key=${c} value=${c}>${COMP[c].name}</option>`)}</select>`}>
+      <div className="pick-tools">
+        <div className="seg" role="radiogroup" aria-label="Période">${[["day", "Par jour"], ["all", "Les 14 jours"]].map(([k, l]) => html`<button key=${k} role="radio" aria-checked=${f.scope === k} className=${f.scope === k ? "on" : ""} onClick=${() => setF({ scope: k })}>${l}</button>`)}</div>
+        <label className="pick-sort"><span className="muted tiny">Trier par</span> <select className="inp" aria-label="Trier par" value=${f.sort} onChange=${(e) => setF({ sort: e.target.value })}>${PICK_SORTS.map(([k, l]) => html`<option key=${k} value=${k}>${l}</option>`)}</select></label>
+      </div>
+      <details className="pick-filters small" open=${nFilters > 0}><summary className="muted">Filtres${nFilters ? ` (${nFilters} actif${nFilters > 1 ? "s" : ""})` : ""}</summary>
+        <div className="filters">
+          <${Field} label="Marché" id="pf-m"><select id="pf-m" className="inp" value=${f.market} onChange=${(e) => setF({ market: e.target.value })}><option value="ALL">Tous</option><option value="1N2">Résultat (1N2)</option><option value="BTTS">Les deux équipes marquent</option></select><//>
+          <${Field} label="Cote min." id="pf-o1"><${NumInput} id="pf-o1" value=${f.oddsMin} min=${1.01} max=${100} placeholder="ex. 1,5" onChange=${(v) => setF({ oddsMin: v })} /><//>
+          <${Field} label="Cote max." id="pf-o2"><${NumInput} id="pf-o2" value=${f.oddsMax} min=${1.01} max=${100} placeholder="ex. 3" onChange=${(v) => setF({ oddsMax: v })} /><//>
+          <${Field} label="Probabilité min. (%)" id="pf-p"><${NumInput} id="pf-p" value=${f.pMin} min=${1} max=${99} placeholder="ex. 60" onChange=${(v) => setF({ pMin: v })} /><//>
+        </div>
+        <div className="row gap-3 wrap items-center mt-1">
+          <label className="row gap-1 items-center"><input type="checkbox" checked=${f.onlyOdds} onChange=${(e) => setF({ onlyOdds: e.target.checked })} /> Avec cote seulement</label>
+          <label className="row gap-1 items-center"><input type="checkbox" checked=${f.onlyValue} onChange=${(e) => setF({ onlyValue: e.target.checked })} /> Value bets seulement</label>
+          ${nFilters > 0 && html`<button className="link small" onClick=${() => setF({ market: "ALL", oddsMin: null, oddsMax: null, pMin: null, onlyOdds: false, onlyValue: false })}>Effacer les filtres</button>`}
+        </div>
+        <div className="tiny muted mt-1">Un filtre de cote écarte les matchs sans cote. Les filtres et le tri sont gardés dans ce navigateur.</div>
+      </details>
+      ${!all && html`<div className="daybar" role="tablist" aria-label="Jour">${days.map((x) => { const n = (byDay[x] || []).length; return html`<button key=${x} role="tab" aria-selected=${x === d} className=${"dayb" + (x === d ? " on" : "") + (n ? "" : " off")} disabled=${!n} onClick=${() => setDay(x)}>
+        <span className="dw">${x === today ? "auj." : new Date(x + "T12:00:00Z").toLocaleDateString("fr-FR", { weekday: "short" })}</span><span className="dn">${+x.slice(8)}</span><span className="dc">${n || "·"}</span></button>`; })}</div>`}
+      <div className="day-h"><b className="cap">${all ? "Les 14 prochains jours" : dayLabel(d, today)}</b> <span className="muted small">· ${list.length} match${list.length > 1 ? "s" : ""}${f.sort !== "time" ? ` · ${(PICK_SORTS.find((x) => x[0] === f.sort) || [])[1].toLowerCase()}` : ""}</span></div>
+      ${!list.length ? html`<${Empty} icon="CalendarX">Aucun match${nFilters ? " avec ces filtres" : " analysé"}${all ? "" : " ce jour-là"}${comp !== "ALL" ? " dans cette compétition" : ""}.<//>` :
       html`<div className="mlist">${list.map((p) => { const added = inSlip.has(p.matchId); const m = ctx.matchById.get(p.matchId); return html`<div key=${p.id} className="mcard">
-        <div className="mc-time"><b className="mono">${koText(ctx, p, false)}</b><span className="comp-tag">${SHORT[p.comp] || p.comp}</span></div>
+        <div className="mc-time">${all && html`<span className="tiny muted cap">${shortDay(p.date)}</span>`}<b className="mono">${koText(ctx, p, false)}</b><span className="comp-tag">${SHORT[p.comp] || p.comp}</span></div>
         <div className="mc-main min-w-0">
           <div className="mc-teams ellip">${p.home} <span className="muted">–</span> ${p.away}</div>
           <div className="mc-pick"><span className="mc-sel">${p.label}</span><span className="pbar" aria-hidden="true"><i style=${{ width: Math.round(100 * p.p) + "%" }}></i></span><span className="mono small">${pct(p.p, 0)}</span></div>

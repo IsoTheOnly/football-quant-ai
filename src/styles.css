@@ -326,3 +326,9 @@ details.adv[open] > summary { color: var(--fg); }
 .byn-c.on i { background: var(--accent, #2f6f5e); }
 .byn-c span { font-size: 10px; line-height: 12px; color: var(--muted, #777); }
 .byn-c.on span { color: inherit; font-weight: 700; }
+
+/* pronostics : tri et filtres */
+.pick-tools { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.pick-sort { display: flex; align-items: center; gap: 6px; }
+.pick-filters { margin-bottom: 8px; }
+.pick-filters .filters { margin-top: 6px; }

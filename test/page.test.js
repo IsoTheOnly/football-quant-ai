@@ -86,6 +86,18 @@ test("la page se charge, affiche les 4 onglets et le formulaire « Mon ticket »
     chip.click();
     assert.ok(await until(() => dlg.querySelector("#lp-m"), 3000), "choix du marché absent après sélection du match");
   }
+  // onglet Pronostics : tri par cote décroissante sur les 14 jours
+  [...d.querySelectorAll(".tabs button")].find((b) => /Pronostics/.test(b.textContent)).click();
+  const sortSel = await until(() => d.querySelector('select[aria-label="Trier par"]'), 120000);
+  assert.ok(sortSel, "tri des pronostics absent");
+  [...d.querySelectorAll('.pick-tools [role="radio"]')].find((b) => /14 jours/.test(b.textContent)).click();
+  const sel = d.querySelector('select[aria-label="Trier par"]');
+  const setSel = Object.getOwnPropertyDescriptor(w.HTMLSelectElement.prototype, "value").set;
+  setSel.call(sel, "oddsDesc"); sel.dispatchEvent(new w.Event("change", { bubbles: true }));
+  await until(() => /cote décroissante/.test(d.body.textContent) && d.querySelectorAll(".mcard").length > 10, 120000);
+  const odds = [...d.querySelectorAll(".mcard .mc-main .muted.tiny b.mono")].map((x) => parseFloat(x.textContent.replace(",", "."))).filter(Number.isFinite);
+  assert.ok(odds.length > 3, "cotes affichées : " + d.querySelectorAll(".mcard").length + " cartes · " + (d.querySelector(".day-h") || {}).textContent);
+  assert.ok(odds.every((x, i) => i === 0 || x <= odds[i - 1] + 1e-9), "tri décroissant des cotes : " + odds.slice(0, 8).join(" "));
   // onglet Performance : carte CLV
   [...d.querySelectorAll(".tabs button")].find((b) => /Performance/.test(b.textContent)).click();
   assert.ok(await until(() => /cote de clôture/i.test(d.body.textContent), 10000), "carte CLV absente");

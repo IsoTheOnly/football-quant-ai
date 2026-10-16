@@ -332,3 +332,15 @@ details.adv[open] > summary { color: var(--fg); }
 .pick-sort { display: flex; align-items: center; gap: 6px; }
 .pick-filters { margin-bottom: 8px; }
 .pick-filters .filters { margin-top: 6px; }
+
+/* légende et lexique */
+.legend { max-width: 1400px; margin: 0 auto 8px; padding: 0 16px; }
+.legend > details { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 10px 14px; }
+.legend summary { cursor: pointer; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.leg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 22px; margin-top: 12px; }
+.leg-g { scroll-margin-top: 110px; }
+.leg-g h4 { font-size: 13px; margin: 0 0 6px; color: var(--accent); }
+.leg-g dl { margin: 0; display: grid; gap: 6px; }
+.leg-i dt { font-weight: 600; font-size: 12.5px; }
+.leg-i dd { margin: 1px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+@media (max-width: 560px) { .leg-grid { grid-template-columns: minmax(0, 1fr); } }

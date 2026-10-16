@@ -339,6 +339,7 @@ window.__fqStartApp = function () {
           ${tab === "audit" && html`<${Audit} ctx=${ctx} />`}
           ${tab === "performance" && html`<${Performance} ctx=${ctx} />`}
         </main>
+        <${Legend} ctx=${ctx} />
         <footer className=${"foot" + (slip.length ? " with-slip" : "")}>
           Outil d'aide à la décision : aucune rentabilité n'est garantie. Pariez uniquement ce que vous pouvez perdre. Aide : joueurs-info-service.fr — 09 74 75 13 13.
         </footer>
@@ -401,6 +402,80 @@ window.__fqStartApp = function () {
         <tbody>${rows.map(([c, x]) => html`<tr key=${c}><td><${CompTag} code=${c} /></td><td className="mono">${x.up}</td><td className=${"mono " + (x.analysed < x.up ? "t-warn" : "")}>${x.analysed}</td><td className="mono">${x.odds}</td><td className="mono">${x.fr}</td><td className=${"mono " + (x.soonOdds < x.soon ? "t-warn" : "")}>${x.soon ? `${x.soonOdds}/${x.soon}` : "—"}</td><td className=${"mono " + (x.missingRes ? "t-warn" : "")}>${x.missingRes}</td><td className="mono">${x.postponed}</td><td className=${"mono " + (x.dup ? "t-warn" : "")}>${x.dup}</td><td className="mono">${x.lastResult ? dFR(x.lastResult) : "—"}</td></tr>`)}</tbody></table><//>
       ${cov.issues.length > 0 && html`<ul className="notes tiny mt-1">${cov.issues.slice(0, 30).map((x, i) => html`<li key=${i}><b>${x.kind}</b> · ${SHORT[x.comp] || x.comp} · ${x.text}</li>`)}</ul>`}
       <div className="tiny muted">Vérifié à chaque cycle (${dtFR(cov.at)}). Un match à plus de 3 jours sans cote est normal : les bookmakers publient en général 3 à 5 jours avant.</div></details>`;
+  }
+
+  /* --------------------------------------------------------------- légende et lexique (bas de page) */
+  /** Ouvre la légende et y fait défiler la page (optionnellement jusqu'à une rubrique) */
+  function openLegend(part) {
+    const el = document.getElementById("legende"); if (!el) return;
+    const d = el.querySelector("details"); if (d) d.open = true;
+    const t = (part && document.getElementById("leg-" + part)) || el;
+    setTimeout(() => t.scrollIntoView({ behavior: "smooth", block: "start" }), 30);
+  }
+  function Legend({ ctx }) {
+    const s = ctx.settings || {};
+    const evMin = Math.round(100 * (s.evMin || 0.03)), relMin = s.relMin || 55;
+    const G = ({ id, title, items }) => html`<div className="leg-g" id=${"leg-" + id}><h4>${title}</h4><dl>${items.map(([k, v], i) => html`<div key=${i} className="leg-i"><dt>${k}</dt><dd>${v}</dd></div>`)}</dl></div>`;
+    return html`<section className="legend" id="legende" aria-label="Légende et lexique"><details>
+      <summary><${Ic} n="BookOpen" s=${15} /> <b>Légende et lexique</b> <span className="muted small">· comment lire les pronostics, les tickets et les chiffres</span></summary>
+      <div className="leg-grid">
+        <${G} id="pronostic" title="Lire un pronostic (un choix par match)" items=${[
+          ["21:00 · L1", "Heure du coup d'envoi (fuseau choisi) et compétition."],
+          ["Le choix en gras", "L'issue retenue pour ce match : une value bet s'il en existe une, sinon l'issue la plus probable parmi 1, N, 2, « les deux équipes marquent » oui / non."],
+          ["La barre et le %", "Probabilité estimée de ce choix. Une barre pleine à moitié = 50 %."],
+          ["cote 1,85 · Winamax", "Meilleure cote réelle relevée pour ce choix, et chez qui. « médiane FR » = médiane des bookmakers français ; « Bet 365 » quand aucune cote française n'est disponible."],
+          ["« à jouer à partir de 1,70 »", "Aucune cote publiée : c'est la cote minimale à exiger pour que le pari soit intéressant selon nos probabilités."],
+          ["fiabilité 72/100", "Qualité des données pour ce match, pas la chance de gagner : matchs récents connus pour les deux équipes (45 %), fraîcheur des résultats (35 %), volume de données de la compétition (20 %). Sous " + relMin + ", le match est exclu des tickets."],
+          ["+ Ticket", "Ajoute le choix à ton panier (« Mon ticket » en bas de l'écran), à enregistrer ensuite en test ou en réel."],
+          ["ⓘ", "Le pourquoi du choix, et le tableau de toutes les sélections du match avec cote juste, cote minimale, cote disponible, espérance et une case pour saisir la cote que tu vois."],
+          ["Choix figé", "Le choix est recalculé à chaque mise à jour jusqu'au coup d'envoi, puis figé et audité au résultat."],
+        ]} />
+        <${G} id="ticket" title="Lire un ticket de la semaine" items=${[
+          ["Sûr, Prudent, Équilibré, Audacieux", "Quatre niveaux de cote visée : 1,4–1,8 · 3–4 · 7–8 · 40–60. Plus la cote est haute, plus la chance est faible : à cote 40, elle ne peut pas dépasser environ 2,5 %."],
+          ["Pastille de stratégie", "La façon dont les sélections ont été choisies (favoris, chance maximale, multi-marchés…). Toutes sont suivies chaque semaine ; celle jouée a la meilleure chance corrigée par son historique."],
+          ["Chance estimée", "Probabilité que toutes les sélections passent (produit des probabilités)."],
+          ["Barres 1, 2, 3…", "Chance du meilleur ticket possible avec 1, 2, 3… sélections pour la même cote visée. La barre colorée = le ticket proposé."],
+          ["Cote suivie de *", "Cote estimée (double chance déduite du 1N2 du même bookmaker) : vérifie le prix réel avant de jouer."],
+          ["Encadré rouge / vert", "Espérance du ticket et cote totale à partir de laquelle il deviendrait rentable."],
+          ["Pourquoi ce ticket / pourquoi", "Justification du ticket (méthode, nombre de sélections, autres stratégies) et de chaque sélection (marché, modèle, marge prélevée, contexte)."],
+          ["ouvert / en cours / figé", "Ouvert : réoptimisé à chaque mise à jour. En cours : le premier match a commencé, le ticket ne bouge plus."],
+          ["Enregistrer ce ticket", "Le copie dans « Mes tickets », en test (pas joué) ou en réel (joué pour de vrai)."],
+        ]} />
+        <${G} id="termes" title="Les termes" items=${[
+          ["Cote", "Ce que rapporte 1 € misé s'il gagne, mise comprise. Cote 2,00 : 1 € rapporte 2 €."],
+          ["Probabilité", "Chance estimée qu'une issue arrive. Elle mélange les cotes du marché (sans marge) et notre modèle, avec un poids appris sur l'historique."],
+          ["Cote juste", "1 ÷ probabilité : la cote à laquelle le pari est neutre. 50 % → 2,00."],
+          ["Marge", "Commission du bookmaker cachée dans ses cotes : 10 à 13 % chez les bookmakers français sur un 1N2."],
+          ["Espérance (EV)", "Gain moyen par euro misé si on jouait le pari une infinité de fois : probabilité × cote − 1. 55 % × 2,00 − 1 = +10 %."],
+          ["Value bet", "Pari dont la cote réelle est assez au-dessus de la cote juste pour une espérance d'au moins +" + evMin + " %, avec une fiabilité suffisante. C'est la seule situation où un pari est intéressant à long terme. Rare : les cotes françaises sont presque toujours sous la cote juste."],
+          ["Intéressant dès", "Cote minimale pour une espérance d'au moins +" + evMin + " % : (1 + " + evMin + " %) ÷ probabilité."],
+          ["Rendement d'une sélection", "Probabilité × cote. 1 = prix juste ; 0,90 = le bookmaker garde 10 %. La chance d'un ticket = produit des rendements ÷ cote totale."],
+          ["Modèle seul / marché", "Modèle seul : notre estimation à partir des résultats et des buts, sans les cotes. Marché : les cotes des bookmakers, marge retirée. Quand ils divergent de plus de 8 points, c'est le plus souvent le marché qui avait raison."],
+          ["Prudence", "Quand modèle et marché divergent, la chance d'une sélection est diminuée pour construire les tickets."],
+          ["Correction d'une stratégie", "Tickets gagnés ÷ tickets annoncés par cette stratégie dans le passé. Au-dessus de 1 : ses tickets passent plus souvent qu'annoncé."],
+          ["Multiboost", "Bonus de cote Betclic selon le nombre de sélections. Désactivé par défaut (Paramètres)."],
+        ]} />
+        <${G} id="marches" title="Les marchés" items=${[
+          ["1 · N · 2", "Victoire de l'équipe à domicile · match nul · victoire de l'équipe à l'extérieur (temps réglementaire)."],
+          ["Double chance (1N, 12, N2)", "Deux issues sur trois : « ne perd pas » (1N, N2) ou « pas de nul » (12)."],
+          ["Les deux équipes marquent (BTTS)", "Oui : chaque équipe marque au moins un but. Non : au moins une ne marque pas."],
+          ["Plus / moins de 2,5 buts", "Au moins 3 buts dans le match / au plus 2."],
+          ["Gagne ou 2 buts d'avance", "Gagné si l'équipe gagne, ou si elle a mené de 2 buts à un moment du match."],
+          ["Buteur / joueur décisif", "Le joueur marque / marque ou fait une passe décisive. Pas de cote française accessible : saisis la cote que tu vois."],
+        ]} />
+        <${G} id="suivi" title="Suivi, audit et mesures" items=${[
+          ["Paper betting (u)", "Tickets fictifs joués par le système, 1 unité chacun : on mesure sans risquer d'argent."],
+          ["Test / réel", "Tes tickets enregistrés : « test » = simulation, pas joué ; « réel » = joué pour de vrai. Les deux sont audités, seuls les réels entrent dans le bilan en euros."],
+          ["Fantôme", "Ticket qu'aurait proposé chaque autre stratégie, suivi en silence pour apprendre laquelle marche le mieux."],
+          ["EN ATTENTE · GAGNÉ · PERDU", "Statut d'un pari ou d'une sélection. ANNULÉ : match reporté ou annulé (cote 1). À VÉRIFIER : à confirmer à la main (ex. buteur non trouvé)."],
+          ["CLV (cote de clôture)", "Compare la cote prise à la cote juste juste avant le match. La battre régulièrement est le meilleur signe d'un vrai avantage, bien avant les gains."],
+          ["Log loss", "Note d'erreur des probabilités : plus bas = meilleur. Prévoir 1/3-1/3-1/3 donne 1,099 ; le marché fait environ 0,99."],
+          ["IC 95 %", "Fourchette dans laquelle se situe probablement la vraie valeur. Très large avec peu de semaines : aucune conclusion possible."],
+          ["Apprentissage / validation / test final", "Trois périodes de l'historique : on ajuste, on décide si un réglage est gardé, puis on mesure sur des matchs qui n'ont servi à aucun choix."],
+          ["Couverture", "Contrôle à chaque mise à jour : matchs à venir analysés, avec cote, résultats manquants, reports, doublons (Automatique › Détails)."],
+        ]} />
+      </div>
+    </details></section>`;
   }
 
   /* --------------------------------------------------------------- export utilitaire */
@@ -1286,6 +1361,7 @@ window.__fqStartApp = function () {
         : "Les tickets de la semaine sont construits à partir de jeudi, quand les cotes du week-end sont publiées. En attendant, voici un aperçu avec les cotes déjà disponibles (non joué)."}</p>
       <div className="tickets">${items.map(({ sc, t, preview }) => t ? html`<${TicketCard} key=${sc.id} ctx=${ctx} t=${t} sc=${sc} preview=${preview} />`
         : html`<article key=${sc.id} className=${"ticket tk-" + sc.id + " tk-empty"}><div className="tk-name">${sc.label}</div><div className="muted small">Pas encore assez de matchs avec cote pour viser une cote ${SC_HINT[sc.id]}. Les cotes arrivent environ 3 jours avant les matchs.</div></article>`)}</div>
+      <div className="mt-2 small"><button className="link small" onClick=${() => openLegend("ticket")}>Légende des tickets et lexique</button></div>
       <details className="mt-2 small"><summary className="muted">Comment lire ces tickets</summary>
         <ul className="notes muted">
           <li>Chance et profit vont ensemble : pour une cote totale donnée, la chance d'un combiné = produit des rendements de ses sélections (chance × cote) ÷ cote totale, et l'espérance suit ce même produit. Le ticket retient donc les sélections où le bookmaker prélève le moins, avec le nombre de sélections qui donne la meilleure chance (les barres comparent 1 à 15 sélections) ; à chance quasi égale, celui qui rapporte le plus.</li>
@@ -1362,6 +1438,7 @@ window.__fqStartApp = function () {
     return html`<${Card} eyebrow=${`Pronostics · ${H} prochains jours · ${total} match${total > 1 ? "s" : ""}${total < allOpen.length ? ` sur ${allOpen.length} (filtrés)` : ""}`} title="Un choix par match" right=${html`<select className="inp" aria-label="Compétition" value=${comp} onChange=${(e) => setComp(e.target.value)}><option value="ALL">Toutes les compétitions</option>${comps.map((c) => html`<option key=${c} value=${c}>${COMP[c].name}</option>`)}</select>`}>
       <div className="pick-tools">
         <div className="seg" role="radiogroup" aria-label="Période">${[["day", "Par jour"], ["all", "Les 14 jours"]].map(([k, l]) => html`<button key=${k} role="radio" aria-checked=${f.scope === k} className=${f.scope === k ? "on" : ""} onClick=${() => setF({ scope: k })}>${l}</button>`)}</div>
+        <button className="link small" onClick=${() => openLegend("pronostic")}>Comment lire ?</button>
         <label className="pick-sort"><span className="muted tiny">Trier par</span> <select className="inp" aria-label="Trier par" value=${f.sort} onChange=${(e) => setF({ sort: e.target.value })}>${PICK_SORTS.map(([k, l]) => html`<option key=${k} value=${k}>${l}</option>`)}</select></label>
       </div>
       <details className="pick-filters small" open=${nFilters > 0}><summary className="muted">Filtres${nFilters ? ` (${nFilters} actif${nFilters > 1 ? "s" : ""})` : ""}</summary>

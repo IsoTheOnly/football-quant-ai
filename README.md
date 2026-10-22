@@ -134,5 +134,5 @@ Règles fixées par Iso le 22/10/2026 : chaque parcours démarre avec 100 € fi
 À chaque ticket gagné, 50 % du capital part au coffre jusqu'à 400 € de coffre pour le parcours, puis tout le capital reste en jeu jusqu'à 1 M€.
 Capital perdu : nouveau parcours à 100 €, le coffre n'est jamais remis en jeu. Bilan = coffre total + capital en jeu − total des mises de départ.
 Ticket choisi : la plus grande chance de passer à cote ≥ 2 (à chance quasi égale, l'espérance départage), chez un seul bookmaker,
-matchs des 3 prochains jours, sélections à 40 % ou plus (nul seulement à 35 % ou plus), 1 à 4 sélections ; réoptimisé jusqu'au premier coup d'envoi, puis figé.
+matchs des 3 prochains jours, sélections à 40 % ou plus (nul seulement à 35 % ou plus), nombre de sélections libre (jusqu'à 15) tant que la cote totale atteint 2 ; réoptimisé jusqu'au premier coup d'envoi, puis figé.
 Code : `updateClaudeSim` (src/autopilot.js), carte « Road to 1 M€ » (onglet Pronostics), ligne dans le résumé du jeudi.

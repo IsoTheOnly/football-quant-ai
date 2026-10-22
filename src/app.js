@@ -1380,7 +1380,7 @@ window.__fqStartApp = function () {
         ${done.map((t) => html`<tr key=${t.id}><td className="mono">${dFR((t.settledAt || "").slice(0, 10))}</td><td className="mono">${t.run}</td><td className="ellip">${t.legs.map((l) => `${l.home}–${l.away} : ${l.label}`).join(" + ")}</td><td className="mono">${fr(t.totalOdds, 2)}</td><td className="mono">${euro(t.stake)}</td>
           <td><${Pill} tone=${STATUS_TONE[t.status] || "muted"}>${t.status}<//></td><td className="mono">${t.toSafe ? euro(t.toSafe) : "—"}</td><td className="mono">${euro(t.after ? t.after.capital : 0)}</td></tr>`)}
       </tbody></table><//>` : null}
-      <p className="tiny muted mt-2">Choix du ticket : la plus grande chance de passer à cote 2 ou plus, chez un seul bookmaker, sur les matchs des 3 prochains jours ; à chance quasi égale, celui qui rapporte le plus. Il est réoptimisé à chaque mise à jour jusqu'au premier coup d'envoi, puis figé. Simulation fictive, aucun pari réel.</p>
+      <p className="tiny muted mt-2">Choix du ticket : la plus grande chance de passer à cote 2 ou plus, avec autant de sélections que nécessaire, chez un seul bookmaker, sur les matchs des 3 prochains jours ; à chance quasi égale, celui qui rapporte le plus. Il est réoptimisé à chaque mise à jour jusqu'au premier coup d'envoi, puis figé. Simulation fictive, aucun pari réel.</p>
     <//>`;
   }
 

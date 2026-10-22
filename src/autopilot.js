@@ -1099,7 +1099,9 @@
    * Un seul ticket à la fois ; il est réoptimisé à chaque cycle jusqu'au premier coup d'envoi, puis figé.
    */
   const CLAUDE_SIM = { start: 100, safeTarget: 400, goal: 1e6, safeShare: 0.5, horizonDays: 3, markets: ["1N2", "DC", "BTTS", "Buts"],
-    sc: { id: "claude", label: "Simulation Claude", lo: 2, hi: 2.6, maxLegs: 4, maxLegOdds: 2.6, stake: 1, legPMin: 0.4 } };
+    // nombre de sélections libre (jusqu'à 15) et pas de cote maximale : seule contrainte, une cote totale d'au moins 2 ;
+    // à cote ≥ 2 atteinte, ajouter une sélection ne ferait que baisser la chance, donc le ticket s'arrête là
+    sc: { id: "claude", label: "Simulation Claude", lo: 2, hi: 1e6, maxLegs: 15, maxLegOdds: 50, stake: 1, legPMin: 0.4 } };
   const r2 = (x) => Math.round(x * 100) / 100;
   function claudeSimState(s, now) {
     if (!s.claudeSim) s.claudeSim = { startedAt: now, run: 1, capital: CLAUDE_SIM.start, runSafe: 0, safe: 0, injected: CLAUDE_SIM.start, peak: CLAUDE_SIM.start,

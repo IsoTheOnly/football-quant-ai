@@ -1322,7 +1322,7 @@ window.__fqStartApp = function () {
       </header>
       <ol className="tk-legs">${t.legs.map((l, i) => html`<li key=${i} className=${"tk-leg" + (l.status === "GAGNÉ" ? " ok" : l.status === "PERDU" ? " ko" : "")}>
         <div className="min-w-0"><div className="muted tiny mono">${koText(ctx, l)} · ${SHORT[l.comp] || l.comp}</div><div className="small ellip">${l.home} – ${l.away}</div><div className="small"><b>${l.label}</b>${U.isNum(l.p) ? html` <span className="muted mono tiny">${pct(l.p, 0)}</span>` : ""}</div>${l.why && html`<details className="tiny muted"><summary>pourquoi</summary>${l.why}</details>`}</div>
-        <div className="tk-leg-r"><span className="mono" title=${l.estOdds ? "cote estimée d'après le 1N2 : vérifiez le prix" : l.oddsSrc || ""}>${fr(l.odds, 2)}${l.estOdds ? "*" : ""}</span>${l.status && l.status !== "EN ATTENTE" ? html`<span className="tiny mono">${l.score || ""} ${l.status === "GAGNÉ" ? "✓" : l.status === "PERDU" ? "✗" : "—"}</span>` : null}</div>
+        <div className="tk-leg-r"><span className="mono" title=${l.estOdds ? (/aucune cote/.test(l.oddsSrc || "") ? l.oddsSrc : "cote estimée d'après le 1N2 : vérifiez le prix") : l.oddsSrc || ""}>${fr(l.odds, 2)}${l.estOdds ? "*" : ""}</span>${l.status && l.status !== "EN ATTENTE" ? html`<span className="tiny mono">${l.score || ""} ${l.status === "GAGNÉ" ? "✓" : l.status === "PERDU" ? "✗" : "—"}</span>` : null}</div>
       </li>`)}</ol>
       <div className="tk-foot">
         ${U.isNum(t.pJoint) && U.isNum(t.totalOdds) && html`<div className=${"ev-verdict" + (t.pJoint * t.totalOdds - 1 >= 0 ? " pos" : "")}>${t.pJoint * t.totalOdds - 1 >= 0

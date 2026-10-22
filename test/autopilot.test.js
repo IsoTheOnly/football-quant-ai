@@ -385,3 +385,20 @@ test("simulation Claude : coffre à 50 % jusqu'à 400 €, puis tout en jeu ; ca
   assert.ok(sim.tickets.every((t) => t.applied), "chaque ticket réglé n'est compté qu'une fois");
   const before = JSON.stringify([sim.capital, sim.safe]); P.updateClaudeSim(ctx, {}); assert.equal(JSON.stringify([sim.capital, sim.safe]), before);
 });
+
+test("simulation Claude : match sans cote publiée → cote estimée = cote juste du modèle − 10 %, marquée estimée", () => {
+  const m = match({ id: "E1", date: "2026-10-17", time: "15:00 UTC+0", status: "PROGRAMMÉ", odds: null, oddsFr: null });
+  const state = FQ.emptyState(); state.settings = Object.assign({}, FQ.DEFAULT_SETTINGS);
+  state.predictions = [{ id: "pe", matchId: "E1", reliability: 80, markets: { p1: 0.6, pN: 0.25, p2: 0.15, bttsYes: 0.5, over25: 0.55 } }];
+  const ctx = ctxFor([m], state);
+  const c = P.claudeSimEstCands(ctx, { start: "2026-10-16", to: "2026-10-19" }, Date.now());
+  const home = c.find((x) => x.market === "1N2" && x.sel === "1");
+  assert.ok(home && home.estOdds && /aucune cote/.test(home.oddsSrc));
+  assert.equal(home.odds, Math.round((0.9 / 0.6) * 100) / 100);
+  assert.ok(c.every((x) => Math.abs(x.p * x.odds - 0.9) < 0.01), "rendement 0,90 partout (marge de 10 %)");
+  // match coté : pas d'estimation, les vraies cotes sont utilisées
+  const m2 = Object.assign({}, m, { id: "E2", odds: { h: 1.6, d: 4, a: 6, src: "Bet 365" } });
+  state.predictions.push(Object.assign({}, state.predictions[0], { id: "pe2", matchId: "E2" }));
+  const c2 = P.claudeSimEstCands(ctxFor([m2], state), { start: "2026-10-16", to: "2026-10-19" }, Date.now());
+  assert.equal(c2.length, 0);
+});

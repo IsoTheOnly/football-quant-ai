@@ -1098,7 +1098,7 @@
    * sélections à 40 % ou plus (une sélection seule à cote 2 peut ainsi l'emporter sur un combiné), nul seulement s'il est très probable.
    * Un seul ticket à la fois ; il est réoptimisé à chaque cycle jusqu'au premier coup d'envoi, puis figé.
    */
-  const CLAUDE_SIM = { start: 100, safeTarget: 400, goal: 1e6, safeShare: 0.5, horizonDays: 3, markets: ["1N2", "DC", "BTTS", "Buts"],
+  const CLAUDE_SIM = { start: 100, safeTarget: 400, goal: 1e6, safeShare: 0.5, horizonDays: 3, markets: ["1N2", "DC", "BTTS", "Buts"], estFactor: 0.9,
     // nombre de sélections libre (jusqu'à 15) et pas de cote maximale : seule contrainte, une cote totale d'au moins 2 ;
     // à cote ≥ 2 atteinte, ajouter une sélection ne ferait que baisser la chance, donc le ticket s'arrête là
     sc: { id: "claude", label: "Simulation Claude", lo: 2, hi: 1e6, maxLegs: 15, maxLegOdds: 50, stake: 1, legPMin: 0.4 } };
@@ -1108,12 +1108,39 @@
       runs: [{ n: 1, start: now, end: null, peak: CLAUDE_SIM.start, tickets: 0, won: 0, safe: 0, result: null }], tickets: [], log: [] };
     return s.claudeSim;
   }
+  /**
+   * Simulation seulement (demande d'Iso du 22/10) : matchs analysés mais sans aucune cote connue.
+   * Cote estimée = cote juste du modèle (1 / p) diminuée de 10 % (marge réaliste d'un bookmaker), marquée « estimée ».
+   */
+  function claudeSimEstCands(ctx, win, nowMs) {
+    const s = ctx.state, set = s.settings, kappa = trainedKappa(), out = [];
+    const lastPred = new Map(); for (const p of s.predictions) lastPred.set(p.matchId, p);
+    for (const m of ctx.matches) {
+      if (m.status !== "PROGRAMMÉ" || m.date < win.start || m.date > win.to || kickoffPassed(m, nowMs)) continue;
+      const pr = lastPred.get(m.id); if (!pr || !pr.markets || (pr.reliability || 0) < (set.relMin || 55)) continue;
+      const om = matchOddsMap(m, set, s.oddsLearn, null, s.userOdds);
+      if (om && om["1N2|1"]) continue; // cote réelle connue : traité avec les vraies cotes
+      const ko = FQ.time.kickoffUtc(m.date, m.time, m.tz);
+      for (const [market, sel, label, p] of selectionsOf(pr, m)) {
+        if (!U.isNum(p) || p <= 0.05 || !CLAUDE_SIM.markets.includes(market)) continue;
+        const odds = Math.round((CLAUDE_SIM.estFactor / p) * 100) / 100;
+        if (odds <= 1.01) continue;
+        const q = legProbs(pr, market, sel);
+        out.push({ matchId: m.id, comp: m.comp, date: m.date, time: m.time || "", kickoff: ko ? new Date(ko).toISOString() : null, home: m.home, away: m.away,
+          market, sel, label, p, pR: robustP(p, q, market, kappa), pMkt: q.mk, pMod: q.mo, odds, estOdds: true, simEst: true,
+          oddsSrc: `cote estimée (aucune cote publiée) : cote juste ${(1 / p).toFixed(2)} − 10 %`, ev: p * odds - 1, rel: pr.reliability,
+          why: `Aucune cote connue pour ce match : cote estimée à ${odds.toFixed(2)}, soit la cote juste du modèle (${(1 / p).toFixed(2)}, chance ${Math.round(100 * p)} %) diminuée de 10 % pour la marge du bookmaker.` });
+      }
+    }
+    return out;
+  }
   function claudeSimPick(ctx, nowMs) {
     const win = { start: ctx.today, to: U.addDays(ctx.today, CLAUDE_SIM.horizonDays) }, sc = CLAUDE_SIM.sc;
+    let est = []; try { est = claudeSimEstCands(ctx, win, nowMs); } catch (e) { est = []; }
     let best = null;
     for (const b of Object.keys(FR_NAMES())) {
       let c; try { c = ticketCandidates(ctx, win, b); } catch (e) { continue; }
-      c = c.filter((x) => CLAUDE_SIM.markets.includes(x.market) && !x.estOdds && !x.userOdds && legOk(sc, x) && (!x.kickoff || Date.parse(x.kickoff) > nowMs + 30 * 60e3));
+      c = c.concat(est).filter((x) => CLAUDE_SIM.markets.includes(x.market) && (!x.estOdds || x.simEst) && !x.userOdds && legOk(sc, x) && (!x.kickoff || Date.parse(x.kickoff) > nowMs + 30 * 60e3));
       const tk = buildTicket(c, sc, { pool: 120, beam: 300 });
       if (!tk) continue;
       tk.book = b;
@@ -1123,7 +1150,9 @@
   }
   function claudeSimWhy(tk, sim) {
     const n = tk.legs.length;
+    const ne = tk.legs.filter((l) => l.simEst || (l.estOdds && /aucune cote/.test(l.oddsSrc || ""))).length;
     return `Ticket le plus probable à cote ≥ 2 sur les matchs des ${CLAUDE_SIM.horizonDays} prochains jours : ${n} sélection${n > 1 ? "s" : ""}, chance estimée ${pc1(tk.pJoint)}, espérance ${Math.round(100 * tk.ev)} %. ` +
+      (ne ? `${ne} sélection${ne > 1 ? "s" : ""} sans cote publiée : cote estimée = cote juste du modèle − 10 % (à vérifier chez le bookmaker). ` : "") +
       `Tout le capital du parcours n° ${sim.run} est misé (${r2(sim.capital)} €) : une perte termine le parcours, un gain met ${sim.runSafe < CLAUDE_SIM.safeTarget ? "50 % du capital au coffre" : "tout le capital en jeu (coffre plein)"}.`;
   }
   function updateClaudeSim(ctx, rep) {
@@ -1493,6 +1522,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, CLAUDE_SIM, updateClaudeSim, claudeSimPick, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+  FQ.P = { claudeSimEstCands, injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, CLAUDE_SIM, updateClaudeSim, claudeSimPick, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
     SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, legOk, DRAW_PMIN, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

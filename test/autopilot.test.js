@@ -356,3 +356,32 @@ test("mélange : à moins de 24 h du coup d'envoi, marché seul ; plus tôt, poi
   const near = P.buildPrediction(ctx, Object.assign({}, base, { date: "2026-10-16", time: "20:00 UTC+0" }), {});
   assert.equal(near.pr.blendInfo.w, P.CLOSE_MODEL_W); assert.equal(near.pr.blendInfo.near, true); assert.equal(near.pr.blendInfo.wBase, wPL);
 });
+
+test("simulation Claude : coffre à 50 % jusqu'à 400 €, puis tout en jeu ; capital perdu → nouveau parcours, coffre conservé", () => {
+  const ms = ["A", "B", "C", "D"].map((k, i) => match({ id: "S" + k, date: "2026-10-1" + (i + 1), status: "TERMINÉ", hg: k === "D" ? 0 : 2, ag: k === "D" ? 1 : 0 }));
+  const state = FQ.emptyState(); state.settings = Object.assign({}, FQ.DEFAULT_SETTINGS);
+  const ctx = ctxFor(ms, state);
+  const tk = (id, matchId, odds, stake, run) => ({ id, status: "EN ATTENTE", frozen: true, legs: [{ matchId, market: "1N2", sel: "1", odds, status: "EN ATTENTE" }], totalOdds: odds, stake, run });
+  P.updateClaudeSim(ctx, {});
+  const sim = state.claudeSim;
+  assert.equal(sim.capital, 100); assert.equal(sim.injected, 100);
+  // gain à 2,2 : 220 € → 110 au coffre, 110 en jeu
+  sim.tickets.length = 0; sim.tickets.push(tk("t1", "SA", 2.2, 100, 1));
+  P.updateClaudeSim(ctx, {});
+  assert.equal(sim.capital, 110); assert.equal(sim.runSafe, 110); assert.equal(sim.safe, 110);
+  // le coffre s'arrête à 400 € : seulement ce qui manque est retiré
+  sim.capital = 200; sim.runSafe = 380; sim.safe = 380; sim.tickets.push(tk("t2", "SB", 2, 200, 1));
+  P.updateClaudeSim(ctx, {});
+  assert.equal(sim.runSafe, 400); assert.equal(sim.capital, 380);
+  // coffre plein : tout reste en jeu
+  sim.tickets.push(tk("t3", "SC", 2, 380, 1));
+  P.updateClaudeSim(ctx, {});
+  assert.equal(sim.capital, 760); assert.equal(sim.runSafe, 400);
+  // perte : nouveau parcours à 100 €, coffre total conservé, 200 € mis au total
+  sim.tickets.push(tk("t4", "SD", 2, 760, 1));
+  P.updateClaudeSim(ctx, {});
+  assert.equal(sim.run, 2); assert.equal(sim.capital, 100); assert.equal(sim.runSafe, 0); assert.equal(sim.safe, 400); assert.equal(sim.injected, 200);
+  assert.equal(sim.runs[0].result, "capital perdu");
+  assert.ok(sim.tickets.every((t) => t.applied), "chaque ticket réglé n'est compté qu'une fois");
+  const before = JSON.stringify([sim.capital, sim.safe]); P.updateClaudeSim(ctx, {}); assert.equal(JSON.stringify([sim.capital, sim.safe]), before);
+});

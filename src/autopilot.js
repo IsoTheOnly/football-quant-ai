@@ -1085,6 +1085,91 @@
    * Une entrée par semaine terminée (tous ses tickets réglés) : tickets joués et fantômes, choix du modèle (réussite observée vs attendue),
    * qualité des probabilités face au marché (log loss), cote de clôture, et stratégie retenue pour la suite.
    */
+
+  /* ------------------------------------------- simulation Claude : de 100 € à 1 M€ (paper, capital remis en jeu) */
+  /**
+   * Règles fixées par Iso (22/10/2026) :
+   * - chaque parcours démarre avec 100 € ; tout le capital est misé sur un ticket de cote totale ≥ 2 ;
+   * - à chaque ticket gagné, 50 % du capital est mis au coffre, jusqu'à 400 € de coffre pour le parcours (×4 la mise de départ),
+   *   puis tout le capital reste en jeu jusqu'à 1 M€ ;
+   * - capital perdu : nouveau parcours à 100 €, le coffre déjà mis de côté n'est jamais remis en jeu.
+   * Choix du ticket : celui qui a la plus grande chance de passer à cote ≥ 2 (à chance quasi égale, celui qui rapporte le plus),
+   * sur les matchs des 3 prochains jours, cotes réelles d'un seul bookmaker (toutes les sélections jouables sur le même ticket),
+   * sélections à 40 % ou plus (une sélection seule à cote 2 peut ainsi l'emporter sur un combiné), nul seulement s'il est très probable.
+   * Un seul ticket à la fois ; il est réoptimisé à chaque cycle jusqu'au premier coup d'envoi, puis figé.
+   */
+  const CLAUDE_SIM = { start: 100, safeTarget: 400, goal: 1e6, safeShare: 0.5, horizonDays: 3, markets: ["1N2", "DC", "BTTS", "Buts"],
+    sc: { id: "claude", label: "Simulation Claude", lo: 2, hi: 2.6, maxLegs: 4, maxLegOdds: 2.6, stake: 1, legPMin: 0.4 } };
+  const r2 = (x) => Math.round(x * 100) / 100;
+  function claudeSimState(s, now) {
+    if (!s.claudeSim) s.claudeSim = { startedAt: now, run: 1, capital: CLAUDE_SIM.start, runSafe: 0, safe: 0, injected: CLAUDE_SIM.start, peak: CLAUDE_SIM.start,
+      runs: [{ n: 1, start: now, end: null, peak: CLAUDE_SIM.start, tickets: 0, won: 0, safe: 0, result: null }], tickets: [], log: [] };
+    return s.claudeSim;
+  }
+  function claudeSimPick(ctx, nowMs) {
+    const win = { start: ctx.today, to: U.addDays(ctx.today, CLAUDE_SIM.horizonDays) }, sc = CLAUDE_SIM.sc;
+    let best = null;
+    for (const b of Object.keys(FR_NAMES())) {
+      let c; try { c = ticketCandidates(ctx, win, b); } catch (e) { continue; }
+      c = c.filter((x) => CLAUDE_SIM.markets.includes(x.market) && !x.estOdds && !x.userOdds && legOk(sc, x) && (!x.kickoff || Date.parse(x.kickoff) > nowMs + 30 * 60e3));
+      const tk = buildTicket(c, sc, { pool: 120, beam: 300 });
+      if (!tk) continue;
+      tk.book = b;
+      if (!best || tk.pRobust > best.pRobust * 1.1 || (tk.pRobust >= best.pRobust * 0.9 && tk.pRobust * tk.totalOdds > best.pRobust * best.totalOdds)) best = tk;
+    }
+    return best;
+  }
+  function claudeSimWhy(tk, sim) {
+    const n = tk.legs.length;
+    return `Ticket le plus probable à cote ≥ 2 sur les matchs des ${CLAUDE_SIM.horizonDays} prochains jours : ${n} sélection${n > 1 ? "s" : ""}, chance estimée ${pc1(tk.pJoint)}, espérance ${Math.round(100 * tk.ev)} %. ` +
+      `Tout le capital du parcours n° ${sim.run} est misé (${r2(sim.capital)} €) : une perte termine le parcours, un gain met ${sim.runSafe < CLAUDE_SIM.safeTarget ? "50 % du capital au coffre" : "tout le capital en jeu (coffre plein)"}.`;
+  }
+  function updateClaudeSim(ctx, rep) {
+    const s = ctx.state;
+    if (s.settings && s.settings.claudeSim === false) return null;
+    const now = new Date().toISOString(), nowMs = Date.now(), C = CLAUDE_SIM;
+    const sim = claudeSimState(s, now);
+    const run = () => sim.runs[sim.runs.length - 1];
+    // 1. règlement du ticket en cours et mise à jour du capital
+    for (const t of sim.tickets) if (t.status === "EN ATTENTE" || (t.status === "À VÉRIFIER" && !t.manualStatus)) settleTicket(ctx, t, now);
+    for (const t of sim.tickets) {
+      if (t.applied || !["GAGNÉ", "PERDU", "ANNULÉ"].includes(t.status)) continue;
+      const R = run(), before = { capital: sim.capital, runSafe: sim.runSafe };
+      if (t.status === "GAGNÉ") {
+        const payout = r2(t.stake * (U.isNum(t.settledOdds) ? t.settledOdds : t.totalOdds));
+        const toSafe = sim.runSafe < C.safeTarget ? Math.min(r2(payout * C.safeShare), r2(C.safeTarget - sim.runSafe)) : 0;
+        sim.runSafe = r2(sim.runSafe + toSafe); sim.safe = r2(sim.safe + toSafe); R.safe = sim.runSafe; R.won++;
+        sim.capital = r2(payout - toSafe); R.peak = Math.max(R.peak, sim.capital); sim.peak = Math.max(sim.peak || 0, sim.capital);
+        t.toSafe = toSafe;
+        if (sim.capital >= C.goal) { R.result = "objectif atteint"; R.end = now; }
+      } else if (t.status === "PERDU") {
+        sim.capital = 0; R.result = "capital perdu"; R.end = now;
+      } else sim.capital = t.stake; // annulé : mise rendue
+      t.applied = true; t.after = { capital: sim.capital, runSafe: sim.runSafe, safe: sim.safe };
+      sim.log.push({ at: now, ticket: t.id, run: t.run, status: t.status, stake: t.stake, odds: t.totalOdds, before, after: t.after });
+      if (rep) rep.claudeSettled = (rep.claudeSettled || 0) + 1;
+      if (t.status === "PERDU") { // nouveau parcours : 100 € neufs, le coffre reste acquis
+        sim.run++; sim.capital = C.start; sim.runSafe = 0; sim.injected = r2(sim.injected + C.start);
+        sim.runs.push({ n: sim.run, start: now, end: null, peak: C.start, tickets: 0, won: 0, safe: 0, result: null });
+      }
+    }
+    // 2. ticket en cours : figé au premier coup d'envoi, sinon réoptimisé
+    const started = (t) => t.legs.some((l) => { const m = ctx.matchById ? ctx.matchById.get(l.matchId) : null; return m ? kickoffPassed(m, nowMs) : l.date < ctx.today; });
+    let open = sim.tickets.find((t) => t.status === "EN ATTENTE" || t.status === "À VÉRIFIER");
+    if (open && !open.frozen && started(open)) { open.frozen = true; open.frozenAt = now; }
+    if (open && open.frozen) return sim;
+    if (run().result === "objectif atteint") return sim;
+    const tk = claudeSimPick(ctx, nowMs);
+    if (!tk) { if (open) { sim.tickets.splice(sim.tickets.indexOf(open), 1); run().tickets--; } sim.wait = { at: now, reason: "aucun ticket de cote ≥ 2 jouable chez un seul bookmaker sur les 3 prochains jours" }; return sim; }
+    delete sim.wait;
+    const body = { label: C.sc.label, scenario: C.sc.id, run: sim.run, book: tk.book, bookName: tk.book ? FR_NAMES()[tk.book] : null, legs: tk.legs.map(legOfCand), totalOdds: r2(tk.totalOdds),
+      pJoint: tk.pJoint, pRobust: tk.pRobust, ev: tk.ev, stake: sim.capital, byN: (tk.byN || []).map((x) => ({ n: x.n, p: x.pJoint, odds: x.totalOdds })), updatedAt: now };
+    body.why = claudeSimWhy(Object.assign({}, tk, { legs: body.legs }), sim);
+    if (open) { Object.assign(open, body); open.revisions = (open.revisions || 0) + 1; }
+    else { sim.tickets.push(Object.assign({ id: U.uid("cs"), createdAt: now, status: "EN ATTENTE", frozen: false, profit: 0, revisions: 0 }, body)); run().tickets++; }
+    return sim;
+  }
+
   function updateJournal(ctx) {
     const s = ctx.state; s.learnLog = s.learnLog || [];
     const done = new Set(s.learnLog.map((e) => e.week));
@@ -1374,6 +1459,8 @@
     // 4 bis. tickets combinés (paper betting, 3 scénarios) et règlement des paris réels saisis
     const tkBefore = JSON.stringify((s.paperTickets || []).map((t) => [t.id, t.status, t.updatedAt, t.frozen]).concat((s.realBets || []).map((t) => [t.id, t.status])));
     updateTickets(ctx, rep);
+    const cs = updateClaudeSim(ctx, rep);
+    if (cs) rep.claudeSim = { run: cs.run, capital: cs.capital, safe: cs.safe, injected: cs.injected };
     rep.clv = updateClv(ctx);
     rep.journal = updateJournal(ctx);
     rep.forecasts = logForecasts(ctx);
@@ -1404,6 +1491,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+  FQ.P = { injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, CLAUDE_SIM, updateClaudeSim, claudeSimPick, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
     SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, legOk, DRAW_PMIN, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

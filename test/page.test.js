@@ -98,6 +98,8 @@ test("la page se charge, affiche les 4 onglets et le formulaire « Mon ticket »
   const odds = [...d.querySelectorAll(".mcard .mc-main .muted.tiny b.mono")].map((x) => parseFloat(x.textContent.replace(",", "."))).filter(Number.isFinite);
   assert.ok(odds.length > 3, "cotes affichées : " + d.querySelectorAll(".mcard").length + " cartes · " + (d.querySelector(".day-h") || {}).textContent);
   assert.ok(odds.every((x, i) => i === 0 || x <= odds[i - 1] + 1e-9), "tri décroissant des cotes : " + odds.slice(0, 8).join(" "));
+  // simulation Claude : carte « Road to 1 M€ » dans l'onglet Pronostics
+  assert.ok(/Road to 1 M€/.test(d.body.textContent), "carte de la simulation Claude absente");
   // légende en bas de page
   assert.ok(d.querySelector("#legende") && /Value bet/.test(d.querySelector("#legende").textContent), "légende absente");
   // onglet Performance : carte CLV

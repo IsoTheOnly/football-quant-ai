@@ -72,6 +72,12 @@ if (CMD === "summary") {
   lines.push(`Paper betting : ${ps.won}/${ps.n} tickets gagnés, ${sg(ps.profit, "u")}.`);
   if (realL.length) lines.push(`Paris réels : ${rs.won}/${rs.n} gagnés, ${sg(rs.profit, "€")}.`);
   if (testL.length) lines.push(`Tes tickets de test (pas joués) : ${ts.won}/${ts.n} gagnés, ${sg(ts.profit, "€")} fictifs.`);
+  const cs = state.claudeSim;
+  if (cs) {
+    const ot = (cs.tickets || []).find((t) => t.status === "EN ATTENTE");
+    lines.push(`Simulation Claude (road to 1 M€) : parcours n° ${cs.run}, capital en jeu ${fr(cs.capital)} €, coffre ${fr(cs.safe)} € pour ${fr(cs.injected)} € misés au total.`);
+    if (ot) lines.push(`    ticket en cours : ${ot.legs.map((l) => `${l.home} – ${l.away} : ${l.label} @ ${fr(l.odds)}`).join(" + ")} (cote ${fr(ot.totalOdds)} chez ${ot.bookName || "—"}, chance ${fr(100 * ot.pJoint, 1)} %)`);
+  }
   if (state.coverage && state.coverage.nIssues) lines.push(`Couverture 14 jours : ${state.coverage.nIssues} point(s) à vérifier (${[...new Set(state.coverage.issues.map((x) => x.kind))].join(", ")}).`);
   const picks = (state.picks || []).filter((p) => p.status === "GAGNÉ" || p.status === "PERDU");
   if (picks.length) lines.push(`Choix du modèle : ${picks.filter((p) => p.status === "GAGNÉ").length}/${picks.length} justes.`);

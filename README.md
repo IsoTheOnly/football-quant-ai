@@ -127,3 +127,12 @@ Chaque choix, ticket fictif et pari réel est comparé à la cote de clôture : 
 - football-data.co.uk (cotes de clôture)
 - The Odds API (bookmakers français)
 - openfootball (CC0, calendrier suisse)
+
+## Simulation Claude : road to 1 M€ (paper)
+
+Règles fixées par Iso le 22/10/2026 : chaque parcours démarre avec 100 € fictifs, entièrement misés sur un ticket de cote totale ≥ 2.
+À chaque ticket gagné, 50 % du capital part au coffre jusqu'à 400 € de coffre pour le parcours, puis tout le capital reste en jeu jusqu'à 1 M€.
+Capital perdu : nouveau parcours à 100 €, le coffre n'est jamais remis en jeu. Bilan = coffre total + capital en jeu − total des mises de départ.
+Ticket choisi : la plus grande chance de passer à cote ≥ 2 (à chance quasi égale, l'espérance départage), chez un seul bookmaker,
+matchs des 3 prochains jours, sélections à 40 % ou plus (nul seulement à 35 % ou plus), 1 à 4 sélections ; réoptimisé jusqu'au premier coup d'envoi, puis figé.
+Code : `updateClaudeSim` (src/autopilot.js), carte « Road to 1 M€ » (onglet Pronostics), ligne dans le résumé du jeudi.

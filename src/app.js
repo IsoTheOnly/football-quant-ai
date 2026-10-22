@@ -1186,6 +1186,7 @@ window.__fqStartApp = function () {
 
     return html`<div className="stack">
       <${WeeklyTickets} ctx=${ctx} />
+      <${ClaudeSimCard} ctx=${ctx} />
       <${MatchPicks} ctx=${ctx} />
       <details className="adv"><summary><${Ic} n="SlidersHorizontal" /> Analyse détaillée : toutes les sélections, value bets, cotes à saisir</summary><div className="stack mt-2">
       <div className="stats">
@@ -1286,8 +1287,8 @@ window.__fqStartApp = function () {
   /* =========================================================================
      TICKETS DE LA SEMAINE, PRONOSTICS 14 JOURS, PANIER ET PARIS RÉELS
      ========================================================================= */
-  const SC_HINT = { sur: "≈ 1,4 à 1,8", prudent: "≈ 3 à 4", equilibre: "≈ 7 à 8", audacieux: "≈ 50" };
-  const SC_DESC = { sur: "Chance de gain la plus haute (55 à 65 %).", prudent: "Peu de sélections, les plus sûres.", equilibre: "Compromis entre chance et gain.", audacieux: "Gros gain possible, faible chance." };
+  const SC_HINT = { sur: "≈ 1,4 à 1,8", prudent: "≈ 3 à 4", equilibre: "≈ 7 à 8", audacieux: "≈ 50", claude: "≥ 2" };
+  const SC_DESC = { sur: "Chance de gain la plus haute (55 à 65 %).", prudent: "Peu de sélections, les plus sûres.", equilibre: "Compromis entre chance et gain.", audacieux: "Gros gain possible, faible chance.", claude: "Tout le capital du parcours en jeu." };
   const dayLabel = (d, today) => d === today ? "Aujourd'hui" : d === U.addDays(today, 1) ? "Demain" : new Date(d + "T12:00:00Z").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
   const shortDay = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" });
   function koText(ctx, x, withDay = true) {
@@ -1335,14 +1336,52 @@ window.__fqStartApp = function () {
           <span><span className="muted">Chance estimée</span> <b className="mono">${pct(t.pJoint, 1)}</b></span>
           ${t.boost ? html`<span><span className="muted">Multiboost</span> <b className="mono">+${fr(100 * t.boost, 1)} %</b></span>` : null}
           <span><span className="muted">Espérance</span> <b className=${"mono " + (t.ev >= 0 ? "t-pos" : "t-neg")}>${sgn(100 * t.ev, 1)} %</b></span>
-          <span><span className="muted">Mise fictive</span> <b className="mono">${fr(t.stake || 1, 0)} u</b></span>
+          <span><span className="muted">Mise fictive</span> <b className="mono">${id === "claude" ? eur(t.stake, "€") : fr(t.stake || 1, 0) + " u"}</b></span>
         </div>
         <div className="row gap-2 items-center wrap justify-between">
-          <span className="row gap-2 items-center">${badge}${settled ? html`<b className=${"mono " + (t.profit > 0 ? "t-pos" : t.profit < 0 ? "t-neg" : "")}>${sgn(t.profit)} u</b>` : null}</span>
+          <span className="row gap-2 items-center">${badge}${settled ? html`<b className=${"mono " + (t.profit > 0 ? "t-pos" : t.profit < 0 ? "t-neg" : "")}>${sgn(t.profit)} ${id === "claude" ? "€" : "u"}</b>` : null}</span>
           ${!settled && html`<${Btn} small kind="primary" onClick=${() => ctx.openReal({ legs: t.legs.map(legOf), label: "Ticket " + (t.label || sc.label), totalOdds: t.totalOdds, fromTicket: t.id || null })}><${Ic} n="Check" /> Enregistrer ce ticket<//>`}
         </div>
       </div>
     </article>`;
+  }
+
+
+  /**
+   * Simulation Claude : de 100 € à 1 M€. Tout le capital du parcours sur un ticket de cote ≥ 2 ; à chaque gain, 50 % au coffre
+   * jusqu'à 400 € par parcours, puis tout reste en jeu ; capital perdu → nouveau parcours à 100 €, le coffre reste acquis.
+   */
+  function ClaudeSimCard({ ctx }) {
+    const sim = ctx.state.claudeSim, C = FQ.P.CLAUDE_SIM, euro = (x) => eur(x, "€");
+    if (!sim) return html`<${Card} eyebrow="Simulation Claude" title="Road to 1 M€"><p className="muted small">La simulation démarre au prochain cycle (100 €, tickets de cote 2 minimum).</p><//>`;
+    const open = sim.tickets.find((t) => t.status === "EN ATTENTE" || t.status === "À VÉRIFIER");
+    const run = sim.runs[sim.runs.length - 1];
+    const bilan = sim.safe + sim.capital - sim.injected;
+    const prog = Math.max(0, Math.min(1, Math.log(Math.max(sim.capital, 1) / C.start) / Math.log(C.goal / C.start)));
+    // gains d'affilée encore nécessaires au ticket actuel (même cote), et chance de les enchaîner
+    const need = (() => { const o = open ? open.totalOdds : 2; let c = sim.capital, sf = sim.runSafe, n = 0; if (!(c > 0)) return null;
+      while (c < C.goal && n < 200) { const pay = c * o, ts = sf < C.safeTarget ? Math.min(pay * C.safeShare, C.safeTarget - sf) : 0; sf += ts; c = pay - ts; n++; } return n; })();
+    const pChain = open && need ? Math.pow(open.pJoint, need) : null;
+    const done = sim.tickets.filter((t) => t.applied).slice(-12).reverse();
+    return html`<${Card} eyebrow="Simulation Claude · paper" title="Road to 1 M€">
+      <p className="muted small lead">Chaque parcours démarre avec 100 € fictifs, entièrement misés sur un ticket de cote 2 minimum. À chaque gain, la moitié du capital part au coffre jusqu'à 400 € par parcours, puis tout reste en jeu jusqu'à 1 M€. Capital perdu : nouveau parcours à 100 €, le coffre n'est jamais remis en jeu.</p>
+      <div className="stats">
+        <${Stat} label="Parcours" value=${"n° " + sim.run} sub=${`${run.won} gagné${run.won > 1 ? "s" : ""} sur ${run.tickets} ticket${run.tickets > 1 ? "s" : ""}`} />
+        <${Stat} label="Capital en jeu" value=${euro(sim.capital)} sub=${`record ${euro(sim.peak || sim.capital)}`} />
+        <${Stat} label="Coffre du parcours" value=${euro(sim.runSafe)} sub=${sim.runSafe >= C.safeTarget ? "plein : tout reste en jeu" : `objectif ${euro(C.safeTarget)}`} />
+        <${Stat} label="Bilan" value=${euro(bilan)} tone=${bilan > 0 ? "pos" : bilan < 0 ? "neg" : null} sub=${`coffre total ${euro(sim.safe)} · mis ${euro(sim.injected)}`} />
+      </div>
+      <div className="mt-2"><div className="row justify-between tiny muted"><span>100 €</span><span>${fr(100 * prog, 1)} % du chemin (échelle log)</span><span>1 M€</span></div>
+        <div className="bar"><i style=${{ width: Math.max(1, Math.round(1000 * prog) / 10) + "%" }}></i></div>
+        ${need && html`<div className="tiny muted mt-1">À cette cote, encore ${need} gains d'affilée pour atteindre 1 M€${pChain !== null ? html` : environ <b>1 chance sur ${fr(1 / pChain, 0)}</b>` : ""}.</div>`}</div>
+      <div className="tickets mt-2">${open ? html`<${TicketCard} ctx=${ctx} t=${open} sc=${C.sc} />`
+        : html`<article className="ticket tk-claude tk-empty"><div className="tk-name">Prochain ticket</div><div className="muted small">${sim.wait ? sim.wait.reason + "." : "Construit au prochain cycle."}</div></article>`}</div>
+      ${done.length ? html`<${TableWrap}><table className="tbl tiny mt-2"><thead><tr><th>Réglé le</th><th>Parcours</th><th>Ticket</th><th>Cote</th><th>Mise</th><th>Résultat</th><th>Coffre +</th><th>Capital après</th></tr></thead><tbody>
+        ${done.map((t) => html`<tr key=${t.id}><td className="mono">${dFR((t.settledAt || "").slice(0, 10))}</td><td className="mono">${t.run}</td><td className="ellip">${t.legs.map((l) => `${l.home}–${l.away} : ${l.label}`).join(" + ")}</td><td className="mono">${fr(t.totalOdds, 2)}</td><td className="mono">${euro(t.stake)}</td>
+          <td><${Pill} tone=${STATUS_TONE[t.status] || "muted"}>${t.status}<//></td><td className="mono">${t.toSafe ? euro(t.toSafe) : "—"}</td><td className="mono">${euro(t.after ? t.after.capital : 0)}</td></tr>`)}
+      </tbody></table><//>` : null}
+      <p className="tiny muted mt-2">Choix du ticket : la plus grande chance de passer à cote 2 ou plus, chez un seul bookmaker, sur les matchs des 3 prochains jours ; à chance quasi égale, celui qui rapporte le plus. Il est réoptimisé à chaque mise à jour jusqu'au premier coup d'envoi, puis figé. Simulation fictive, aucun pari réel.</p>
+    <//>`;
   }
 
   function WeeklyTickets({ ctx }) {

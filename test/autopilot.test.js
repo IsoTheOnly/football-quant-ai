@@ -339,3 +339,20 @@ test("tickets : un seul par semaine et par niveau après fusion de deux cycles p
   const f = Object.assign({}, a, { id: "tk_f", week: "2026-10-12" });
   assert.equal(FQ.dedupeTickets([a, f]).length, 2);
 });
+
+test("mélange : à moins de 24 h du coup d'envoi, marché seul ; plus tôt, poids appris de la compétition", () => {
+  const r = raw(); const today = "2026-10-16";
+  const matches = FQ.buildMatches(FQ.ETL.build(r), today);
+  FQ.TRAINED = TRAINED;
+  const wPL = TRAINED.blend.byComp.PL;
+  assert.ok(wPL > 0, "poids du modèle > 0 en PL dans l'entraînement de référence");
+  const base = matches.find((m) => m.comp === "PL" && m.status === "PROGRAMMÉ" && m.date > "2026-10-17" && P.probOdds(m));
+  assert.ok(base, "un match de PL coté à plus de 24 h");
+  const cache = new Map();
+  const ctx = { mode: "real", state: FQ.emptyState(), matches, matchById: new Map(matches.map((m) => [m.id, m])), today, rulesMap: FQ.RULES,
+    getModel: (c, d) => { const k = c + d; if (!cache.has(k)) cache.set(k, FQ.fitModel(matches, c, d)); return cache.get(k); } };
+  const far = P.buildPrediction(ctx, base, {});
+  assert.equal(far.pr.blendInfo.w, wPL); assert.equal(far.pr.blendInfo.near, false);
+  const near = P.buildPrediction(ctx, Object.assign({}, base, { date: "2026-10-16", time: "20:00 UTC+0" }), {});
+  assert.equal(near.pr.blendInfo.w, P.CLOSE_MODEL_W); assert.equal(near.pr.blendInfo.near, true); assert.equal(near.pr.blendInfo.wBase, wPL);
+});

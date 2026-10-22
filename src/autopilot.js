@@ -36,11 +36,17 @@
     const bl = FQ.TRAINED && FQ.TRAINED.blend;
     const po = probOdds(match);
     if (pr.ok && po && bl && bl.accepted && !opts.noBlend && ctx.mode !== "demo") {
-      const w = bl.byComp && bl.byComp[match.comp] !== undefined ? bl.byComp[match.comp] : bl.w;
+      const wBase = bl.byComp && bl.byComp[match.comp] !== undefined ? bl.byComp[match.comp] : bl.w;
+      // à moins de 24 h du coup d'envoi, la cote intègre les nouvelles d'équipe : le modèle n'y ajoute plus rien
+      // (historique Bet 365 avant-match → clôture : poids optimal du modèle 0 toutes compétitions, 0,05 en PL ;
+      //  suivi réel 16-21/10 : tout l'écart au marché à J-1 et au coup d'envoi venait des compétitions à poids > 0)
+      const ko = FQ.time && FQ.time.kickoffUtc ? FQ.time.kickoffUtc(match.date, match.time, match.tz) : null;
+      const near = U.isNum(ko) && ko - Date.now() <= NEAR_KO_MS;
+      const w = near ? Math.min(wBase, CLOSE_MODEL_W) : wBase;
       const B = FQ.blend([pr.markets.p1, pr.markets.pN, pr.markets.p2], po.t, w, bl.devig || "norm");
       if (B.used) {
         pr.modelMarkets = { p1: pr.markets.p1, pN: pr.markets.pN, p2: pr.markets.p2 };
-        pr.blendInfo = { w, market: B.market, src: po.src, method: bl.devig || "norm" };
+        pr.blendInfo = { w, wBase, near, market: B.market, src: po.src, method: bl.devig || "norm" };
         pr.markets = Object.assign({}, pr.markets, { p1: B.p3[0], pN: B.p3[1], p2: B.p3[2] });
       }
     }
@@ -115,6 +121,7 @@
    * Cotes servant à estimer les probabilités (pas à parier) : les plus précises disponibles.
    * Bet 365 (marge faible) quand il existe, sinon la médiane des bookmakers français.
    */
+  const NEAR_KO_MS = 24 * 3600e3, CLOSE_MODEL_W = 0;
   function probOdds(match) {
     // 1. référence sharp (Pinnacle, sinon bourse) : la cote la plus juste du marché
     const sh = sharpRef(match);
@@ -1397,6 +1404,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { injuryImpact, INJ_COEF, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+  FQ.P = { injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
     SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, legOk, DRAW_PMIN, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

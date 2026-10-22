@@ -89,6 +89,7 @@ Validation chronologique en trois périodes : apprentissage (01/07/2025 → 28/0
 - La validation décide si un réglage est gardé : hyperparamètres par compétition, calibration, méthode de retrait de la marge, poids modèle / marché. Un réglage gardé est réajusté sur apprentissage + validation.
 - Le test final n'est utilisé pour aucun choix : il est seulement mesuré, avec intervalles de confiance (Wilson pour les taux de réussite, bootstrap pour les rendements et les écarts de log loss).
 - Sources séparées : chaque sélection garde la probabilité du marché sans marge, celle du modèle sportif seul et la probabilité retenue (mélange appris).
+- À moins de 24 h du coup d'envoi, la probabilité retenue est celle du marché seul : sur l'historique (Bet 365 avant-match → clôture, `tools/poids_cloture.js`), le poids optimal du modèle tombe à 0 près du match, et le suivi réel du 16 au 21/10 attribuait tout l'écart au marché aux compétitions où le modèle gardait un poids.
 
 ## Suivi prospectif
 

@@ -64,6 +64,24 @@
   }
   FQ.validateState = validateState;
 
+  /**
+   * Un seul ticket paper par semaine et par niveau. Deux cycles lancés en parallèle (page ouverte dans deux onglets,
+   * page et tâche planifiée) peuvent chacun créer le ticket de la semaine ; la fusion par identifiant les garderait tous les deux.
+   * On garde celui qui est engagé (réglé ou figé), sinon le plus récemment mis à jour.
+   */
+  function dedupeTickets(list) {
+    const rank = (t) => (t.status !== "EN ATTENTE" ? 2 : t.frozen ? 1 : 0);
+    const best = new Map();
+    for (const t of list || []) {
+      const k = (t.week || "") + "|" + (t.scenario || "");
+      const b = best.get(k);
+      if (!b || rank(t) > rank(b) || (rank(t) === rank(b) && (t.updatedAt || t.createdAt || "") > (b.updatedAt || b.createdAt || ""))) best.set(k, t);
+    }
+    const keep = new Set(best.values());
+    return (list || []).filter((t) => keep.has(t));
+  }
+  FQ.dedupeTickets = dedupeTickets;
+
   function mergeStates(cur, inc) {
     const out = JSON.parse(JSON.stringify(cur));
     let added = 0, dup = 0;
@@ -82,6 +100,7 @@
         else dup++;
       }
     }
+    out.paperTickets = dedupeTickets(out.paperTickets);
     out.deletedReal = Array.from(new Set((out.deletedReal || []).concat(inc.deletedReal || [])));
     out.realBets = (out.realBets || []).filter((x) => !out.deletedReal.includes(x.id));
     for (const [id, r] of Object.entries(inc.results || {})) { if (out.results[id]) dup++; else { out.results[id] = r; added++; } }

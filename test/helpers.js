@@ -4,6 +4,14 @@ const path = require("path"), fs = require("fs"), zlib = require("zlib");
 const SRC = path.join(__dirname, "..", "src");
 for (const f of ["engine.js", "standings.js", "core.js", "autopilot.js", "etl2.js", "train2.js"]) require(path.join(SRC, f));
 const FQ = globalThis.FQ;
+// Horloge figée sur la date des données de référence (16/10/2026) : sans cela, les coups d'envoi des rencontres
+// embarquées deviennent passés avec le temps et les tests de tickets ou de couverture échouent sans régression réelle.
+const FIXED_NOW = Date.parse("2026-10-16T10:00:00Z");
+const RealDate = Date;
+globalThis.Date = class extends RealDate {
+  constructor(...a) { if (a.length) super(...a); else super(FIXED_NOW); }
+  static now() { return FIXED_NOW; }
+};
 
 let rawCache = null;
 /** Copie fraîche du magasin brut embarqué dans le dépôt */

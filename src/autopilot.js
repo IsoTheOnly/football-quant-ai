@@ -959,7 +959,7 @@
    */
   function updateTickets(ctx, rep) {
     const s = ctx.state, now = new Date().toISOString(), nowMs = Date.now();
-    s.paperTickets = s.paperTickets || []; s.realBets = s.realBets || []; s.shadowTickets = s.shadowTickets || [];
+    s.paperTickets = FQ.dedupeTickets ? FQ.dedupeTickets(s.paperTickets || []) : s.paperTickets || []; s.realBets = s.realBets || []; s.shadowTickets = s.shadowTickets || [];
     for (const t of s.paperTickets.concat(s.realBets, s.shadowTickets)) if ((t.status === "EN ATTENTE" || (t.status === "À VÉRIFIER" && !t.manualStatus)) && settleTicket(ctx, t, now) && rep && !t.arm) rep.ticketsSettled = (rep.ticketsSettled || 0) + 1;
     const started = (t) => t.legs.some((l) => { const m = ctx.matchById ? ctx.matchById.get(l.matchId) : null; return m ? kickoffPassed(m, nowMs) : l.date < ctx.today; });
     for (const t of s.paperTickets.concat(s.shadowTickets)) if (t.status === "EN ATTENTE" && !t.frozen && started(t)) { t.frozen = true; t.frozenAt = now; }

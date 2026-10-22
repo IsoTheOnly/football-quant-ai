@@ -320,3 +320,22 @@ test("ticket non admissible : sous l'espérance minimale, aucun ticket affiché,
   assert.ok((state.shadowTickets || []).length > 0);
   assert.ok((state.forecastLog || []).length > 50, "journal des prévisions alimenté par le cycle");
 });
+
+test("tickets : un seul par semaine et par niveau après fusion de deux cycles parallèles", () => {
+  const leg = { matchId: "m1", market: "1N2", sel: "1", odds: 1.5 };
+  const a = { id: "tk_a", week: "2026-10-19", scenario: "prudent", status: "EN ATTENTE", frozen: false, legs: [leg], createdAt: "2026-10-22T06:07:34Z", updatedAt: "2026-10-22T07:03:22Z" };
+  const b = { id: "tk_b", week: "2026-10-19", scenario: "prudent", status: "EN ATTENTE", frozen: false, legs: [leg], createdAt: "2026-10-22T06:07:44Z", updatedAt: "2026-10-22T06:07:44Z" };
+  const c = { id: "tk_c", week: "2026-10-19", scenario: "sur", status: "EN ATTENTE", frozen: false, legs: [leg], createdAt: "2026-10-22T06:07:44Z" };
+  const base = FQ.emptyState(), inc = FQ.emptyState();
+  base.paperTickets = [a, c]; inc.paperTickets = [b];
+  const out = FQ.mergeStates(base, inc).state.paperTickets;
+  assert.deepEqual(out.map((t) => t.id).sort(), ["tk_a", "tk_c"]); // le plus récemment mis à jour l'emporte
+  // un ticket figé ou réglé l'emporte toujours sur un ticket encore modifiable
+  const d = Object.assign({}, b, { id: "tk_d", frozen: true, updatedAt: "2026-10-20T00:00:00Z" });
+  assert.deepEqual(FQ.dedupeTickets([a, d]).map((t) => t.id), ["tk_d"]);
+  const e = Object.assign({}, b, { id: "tk_e", status: "PERDU", updatedAt: "2026-10-19T00:00:00Z" });
+  assert.deepEqual(FQ.dedupeTickets([a, d, e]).map((t) => t.id), ["tk_e"]);
+  // semaines différentes : rien n'est retiré
+  const f = Object.assign({}, a, { id: "tk_f", week: "2026-10-12" });
+  assert.equal(FQ.dedupeTickets([a, f]).length, 2);
+});

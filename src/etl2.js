@@ -308,7 +308,8 @@
     const o = Object.assign({ max: 36, calendar: true }, opts);
     const want = new Map();
     const add = (comp, date, why) => { const lg = E.ESPN_LEAGUES[comp]; if (!lg) return; const k = comp + date; if (!want.has(k)) want.set(k, { comp, league: lg, date, why, url: E.espnUrl(lg, date) }); };
-    for (const m of M) if (m.eid && m.hg === null && m.date <= today && m.date >= addD(today, -5) && m.status !== "ANNULÉ") add(m.comp, m.date, "résultat");
+    // résultats manquants sur 14 jours (un résultat bloqué plusieurs jours, par exemple après un renommage d'équipe, est rattrapé)
+    for (const m of M) if (m.eid && m.hg === null && m.date <= today && m.date >= addD(today, -14) && m.status !== "ANNULÉ") add(m.comp, m.date, "résultat");
     for (const m of M) if (m.eid && m.hg === null && m.date > today && m.date <= addD(today, 3)) add(m.comp, m.date, "cotes/horaires");
     const list = [...want.values()].sort((a, b) => (a.why === b.why ? (a.date < b.date ? -1 : 1) : a.why === "résultat" ? -1 : 1)).slice(0, o.max - 4);
     if (o.calendar) {
@@ -342,6 +343,9 @@
    * Contrôles : identifiant numérique, statut connu, équipes déjà connues de la compétition (ou identifiant existant, mêmes équipes),
    * score 0–20 pour un match terminé ; cotes gardées seulement avant le match. Rien n'est inventé : une ligne douteuse est rejetée.
    */
+  /** Forme simplifiée d'un nom d'équipe : sans accents, casse, ponctuation ni particules (de, del, la, fc, cf, club…). */
+  E.teamKey = (n) => String(n || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ")
+    .split(/\s+/).filter((w) => w && !["de", "del", "la", "le", "the", "fc", "cf", "club", "sc", "ac"].includes(w)).join("");
   E.ingestFiles = function (raw, files, fetchedAt, ingest) {
     const ing = ingest || { files: 0, lines: 0, accepted: 0, rejected: [], odds: 0, newResults: 0 };
     for (const fobj of files) {
@@ -351,12 +355,19 @@
       raw.feeds = raw.feeds || {}; raw.feeds.checks = raw.feeds.checks || {}; raw.feeds.checks[comp + "|" + mm[2]] = fetchedAt;
       raw.espn[comp] = raw.espn[comp] || {};
       const known = new Set(Object.values(raw.espn[comp]).flatMap((r) => [r[2], r[3]]));
+      // ESPN renomme parfois une équipe (« Atlético Madrid » → « Atlético de Madrid », « VIKING FK » → « Viking FK ») :
+      // un nom inconnu dont la forme simplifiée correspond à un seul nom connu reprend ce nom connu
+      const canonOf = new Map();
+      for (const n of known) { const k = E.teamKey(n); canonOf.set(k, canonOf.has(k) && canonOf.get(k) !== n ? null : n); }
+      const canonName = (n) => { if (known.has(n)) return n; const c = canonOf.get(E.teamKey(n)); return c || n; };
       const rows = [];
       for (const line of String(fobj.text || "").split(/\r?\n/)) {
         const t = line.trim().replace(/^```(json)?|```$/g, "").trim(); if (!t.startsWith("{")) continue;
         ing.lines++;
         let o; try { o = JSON.parse(t); } catch (e) { ing.rejected.push(`${f} : JSON invalide`); continue; }
         const st = STC[o.status];
+        if (typeof o.home === "string") o.home = canonName(o.home);
+        if (typeof o.away === "string") o.away = canonName(o.away);
         const prev = raw.espn[comp][String(o.id)];
         const okNames = known.has(o.home) && known.has(o.away);
         if (!/^\d+$/.test(String(o.id)) || !st || !/^\d{4}-\d{2}-\d{2}T/.test(o.date || "") || (!okNames && !prev)) { ing.rejected.push(`${f} : ${o.home} – ${o.away} (${o.status}) non reconnu`); continue; }

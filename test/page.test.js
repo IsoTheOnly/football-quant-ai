@@ -37,6 +37,10 @@ function open(html) {
   virtualConsole.on("error", (...a) => errors.push(a.map(String).join(" ")));
   const dom = new JSDOM(html, { runScripts: "dangerously", pretendToBeVisual: true, url: "https://fq.test/", virtualConsole,
     beforeParse(w) {
+      // horloge de la page ramenée au 16/10/2026 (date des données embarquées), en continuant d'avancer :
+      // sans cela les matchs cotés de l'instantané deviennent passés avec le temps et la page n'a plus rien à afficher
+      const RD = w.Date, off = Date.parse("2026-10-16T10:00:00Z") - RD.now();
+      w.Date = class extends RD { constructor(...a) { if (a.length) super(...a); else super(RD.now() + off); } static now() { return RD.now() + off; } };
       w.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
       w.matchMedia = () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} });
       w.HTMLElement.prototype.scrollIntoView = function () {};

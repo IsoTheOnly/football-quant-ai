@@ -149,3 +149,17 @@ test("API-Football : absences rattachées au bon match et au bon côté", () => 
   assert.equal(got.injuries.away[0][0], "A. Martin");
   assert.match(E.afInjuriesUrl("2026-10-17"), /injuries\?date=2026-10-17$/);
 });
+
+test("ESPN : équipe renommée (« Atlético de Madrid ») → rattachée au nom connu, le résultat est intégré", () => {
+  const raw = { espn: { CL: { "401915392": ["401915392", "2026-10-20T19:00Z", "VfB Stuttgart", "Atlético Madrid", null, null, "S", 0, "", null, null, null, null, ""] } }, oddsEspn: {}, feeds: {} };
+  const line = JSON.stringify({ id: "401915392", date: "2026-10-20T19:00Z", home: "VfB Stuttgart", away: "Atlético de Madrid", status: "STATUS_FULL_TIME", hs: 1, as: 1 });
+  const ing = FQ.ETL.ingestFiles(raw, [{ name: "CL__2026-10-20", text: line }], "2026-10-21T05:00:00Z");
+  assert.equal(ing.rejected.length, 0, JSON.stringify(ing.rejected));
+  const r = raw.espn.CL["401915392"];
+  assert.equal(r[3], "Atlético Madrid"); assert.equal(r[4], 1); assert.equal(r[5], 1);
+  // deux équipes vraiment différentes sous le même identifiant : toujours rejeté
+  const bad = JSON.stringify({ id: "401915392", date: "2026-10-20T19:00Z", home: "VfB Stuttgart", away: "Real Madrid", status: "STATUS_FULL_TIME", hs: 1, as: 1 });
+  raw.espn.CL["401915392"] = ["401915392", "2026-10-20T19:00Z", "VfB Stuttgart", "Atlético Madrid", null, null, "S", 0, "", null, null, null, null, ""];
+  raw.espn.CL.x = ["x", "2026-09-01T19:00Z", "Real Madrid", "Juventus", 1, 0, "F", 0, "", null, null, null, null, ""];
+  assert.equal(FQ.ETL.ingestFiles(raw, [{ name: "CL__2026-10-20", text: bad }], "2026-10-21T05:00:00Z").rejected.length, 1);
+});

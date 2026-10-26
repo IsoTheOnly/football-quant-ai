@@ -298,6 +298,16 @@
 
   /* ------------------------------------------------------------ collecte web (ESPN, lignes JSON) */
   E.FETCH_PROMPT = 'Output ONLY JSON lines, one per event, no prose, copying values exactly from the data: {"id": event id, "date": event date, "slug": season slug, "status": status.type.name, "neutral": neutralSite, "home": home team displayName, "away": away team displayName, "hs": home score, "as": away score, "goals": [[home(0)/away(1), athlete displayName, clock displayValue, "og" if ownGoal / "p" if penaltyKick / ""] for details with scoringPlay true], "odds": [homeTeamOdds.value, drawOdds.value, awayTeamOdds.value, provider name] or null}';
+  E.RESULT_LOOKBACK = 30; // jours : un résultat manquant est recherché jusqu'à 30 jours après la date prévue
+  E.espnSummaryUrl = (lg, id) => `https://site.api.espn.com/apis/site/v2/sports/soccer/${lg}/summary?event=${id}&region=gb&lang=en`;
+  /** Matchs ESPN encore sans résultat (date passée, 30 jours au plus) absents du scoreboard lu à leur date : probablement reprogrammés. */
+  E.missingAfterFetch = function (M, files, today) {
+    const seen = new Set();
+    const read = new Set(files.map((f) => f.name.replace(/\.jsonl$/, "")));
+    for (const f of files) for (const l of String(f.text || "").split(/\r?\n/)) { const m = /"id"\s*:\s*"?(\d+)/.exec(l); if (m) seen.add(m[1]); }
+    return M.filter((m) => m.eid && m.hg === null && m.date <= today && m.date >= addD(today, -E.RESULT_LOOKBACK) && m.status !== "ANNULÉ"
+      && E.ESPN_LEAGUES[m.comp] && read.has(m.comp + "__" + m.date) && !seen.has(String(m.eid)));
+  };
   E.espnUrl = (lg, date) => `https://site.api.espn.com/apis/site/v2/sports/soccer/${lg}/scoreboard?dates=${date.replace(/-/g, "")}&region=gb&lang=en`;
   const addD = (d, n) => new Date(Date.parse(d + "T00:00:00Z") + n * 864e5).toISOString().slice(0, 10);
   /**
@@ -308,8 +318,8 @@
     const o = Object.assign({ max: 36, calendar: true }, opts);
     const want = new Map();
     const add = (comp, date, why) => { const lg = E.ESPN_LEAGUES[comp]; if (!lg) return; const k = comp + date; if (!want.has(k)) want.set(k, { comp, league: lg, date, why, url: E.espnUrl(lg, date) }); };
-    // résultats manquants sur 14 jours (un résultat bloqué plusieurs jours, par exemple après un renommage d'équipe, est rattrapé)
-    for (const m of M) if (m.eid && m.hg === null && m.date <= today && m.date >= addD(today, -14) && m.status !== "ANNULÉ") add(m.comp, m.date, "résultat");
+    // résultat manquant recherché jusqu'à E.RESULT_LOOKBACK jours (un résultat bloqué, par exemple après un renommage d'équipe, est rattrapé)
+    for (const m of M) if (m.eid && m.hg === null && m.date <= today && m.date >= addD(today, -E.RESULT_LOOKBACK) && m.status !== "ANNULÉ") add(m.comp, m.date, "résultat");
     for (const m of M) if (m.eid && m.hg === null && m.date > today && m.date <= addD(today, 3)) add(m.comp, m.date, "cotes/horaires");
     const list = [...want.values()].sort((a, b) => (a.why === b.why ? (a.date < b.date ? -1 : 1) : a.why === "résultat" ? -1 : 1)).slice(0, o.max - 4);
     if (o.calendar) {
@@ -355,8 +365,11 @@
       raw.feeds = raw.feeds || {}; raw.feeds.checks = raw.feeds.checks || {}; raw.feeds.checks[comp + "|" + mm[2]] = fetchedAt;
       raw.espn[comp] = raw.espn[comp] || {};
       const known = new Set(Object.values(raw.espn[comp]).flatMap((r) => [r[2], r[3]]));
-      // ESPN renomme parfois une équipe (« Atlético Madrid » → « Atlético de Madrid », « VIKING FK » → « Viking FK ») :
-      // un nom inconnu dont la forme simplifiée correspond à un seul nom connu reprend ce nom connu
+      // ESPN renomme parfois une équipe (« Atlético Madrid » → « Atlético de Madrid ») : on retrouve le nom déjà stocké par l'identifiant d'équipe
+      const nameById = {};
+      for (const r of Object.values(raw.espn[comp])) { if (r[10]) nameById[String(r[10])] = r[2]; if (r[11]) nameById[String(r[11])] = r[3]; }
+      // repli quand l'identifiant d'équipe n'est pas stocké (lignes anciennes, Ligue des champions) : un nom inconnu
+      // dont la forme simplifiée (sans accents, casse ni particules) correspond à un seul nom connu reprend ce nom
       const canonOf = new Map();
       for (const n of known) { const k = E.teamKey(n); canonOf.set(k, canonOf.has(k) && canonOf.get(k) !== n ? null : n); }
       const canonName = (n) => { if (known.has(n)) return n; const c = canonOf.get(E.teamKey(n)); return c || n; };
@@ -366,9 +379,14 @@
         ing.lines++;
         let o; try { o = JSON.parse(t); } catch (e) { ing.rejected.push(`${f} : JSON invalide`); continue; }
         const st = STC[o.status];
+        const prev = raw.espn[comp][String(o.id)];
+        if (prev && o.hid && o.aid && String(prev[10] || "") === String(o.hid) && String(prev[11] || "") === String(o.aid)) { o.home = prev[2]; o.away = prev[3]; }
+        else {
+          if (o.hid && !known.has(o.home) && nameById[String(o.hid)]) o.home = nameById[String(o.hid)];
+          if (o.aid && !known.has(o.away) && nameById[String(o.aid)]) o.away = nameById[String(o.aid)];
+        }
         if (typeof o.home === "string") o.home = canonName(o.home);
         if (typeof o.away === "string") o.away = canonName(o.away);
-        const prev = raw.espn[comp][String(o.id)];
         const okNames = known.has(o.home) && known.has(o.away);
         if (!/^\d+$/.test(String(o.id)) || !st || !/^\d{4}-\d{2}-\d{2}T/.test(o.date || "") || (!okNames && !prev)) { ing.rejected.push(`${f} : ${o.home} – ${o.away} (${o.status}) non reconnu`); continue; }
         if (prev && (prev[2] !== o.home || prev[3] !== o.away)) { ing.rejected.push(`${f} : équipes différentes pour l'identifiant ${o.id}`); continue; }
@@ -377,7 +395,7 @@
         if (fin && (!Number.isFinite(hs) || !Number.isFinite(as) || hs < 0 || as < 0 || hs > 20 || as > 20)) { ing.rejected.push(`${f} : score invalide ${o.hs}-${o.as}`); continue; }
         const goals = fin && Array.isArray(o.goals) ? o.goals.filter((g) => Array.isArray(g) && (g[0] === 0 || g[0] === 1)).map((g) => [g[0], String(g[1] || "?"), String(g[2] || ""), g[3] === "og" || g[3] === "p" ? g[3] : ""]) : null;
         if (fin && (!prev || prev[4] === null)) ing.newResults++;
-        rows.push([String(o.id), o.date, o.home, o.away, hs, as, st, o.neutral ? 1 : 0, o.slug || (prev && prev[8]) || "", goals, prev ? prev[10] : null, prev ? prev[11] : null, null, prev ? prev[13] : ""]);
+        rows.push([String(o.id), o.date, o.home, o.away, hs, as, st, o.neutral ? 1 : 0, o.slug || (prev && prev[8]) || "", goals, prev && prev[10] ? prev[10] : o.hid || null, prev && prev[11] ? prev[11] : o.aid || null, null, prev ? prev[13] : ""]);
         if (Array.isArray(o.odds) && o.odds.length >= 3 && o.odds.slice(0, 3).every((x) => Number.isFinite(+x) && +x > 1) && !fin && st !== "L") {
           raw.oddsEspn[String(o.id)] = [comp, o.date, o.home, o.away, +o.odds[0], +o.odds[1], +o.odds[2], String(o.odds[3] || "Bet 365"), fetchedAt]; ing.odds++;
         }

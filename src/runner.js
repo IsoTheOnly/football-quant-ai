@@ -131,6 +131,31 @@ if (useFetched) {
     if (!r.ok) { net.espn.fail++; if (net.espn.fail >= 4 && net.espn.ok === 0) break; continue; }
     try { files.push({ name: x.file, text: E.espnJsonToLines(JSON.parse(r.body)) }); net.espn.ok++; } catch (e) { net.espn.fail++; notes.push(`ESPN ${x.file} illisible`); }
   }
+  // matchs reprogrammés : absents du scoreboard de leur date initiale → nouvelle date lue sur la fiche du match, puis scoreboard de cette date
+  if (net.espn.ok) {
+    const moved = E.missingAfterFetch(M0, files, today).slice(0, 20);
+    const extra = new Map();
+    for (const m of moved) {
+      const lg = E.ESPN_LEAGUES[m.comp]; net.espn.tried++;
+      const r = get(E.espnSummaryUrl(lg, m.eid));
+      if (!r.ok) { net.espn.fail++; continue; }
+      net.espn.ok++;
+      try {
+        const c = ((JSON.parse(r.body).header || {}).competitions || [])[0] || {};
+        const d = /^\d{4}-\d{2}-\d{2}T/.test(c.date || "") ? new Date(c.date) : null; if (!d) continue;
+        const fmt = (tz) => new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+        const local = fmt("UTC");
+        for (const nd of new Set([local, fmt("America/New_York")])) if (nd !== m.date && !files.some((f) => f.name === m.comp + "__" + nd)) extra.set(m.comp + "__" + nd, { comp: m.comp, lg, date: nd });
+        notes.push(`ESPN : ${m.home} – ${m.away} (${m.date}) reprogrammé au ${local}`);
+      } catch (e) { notes.push(`ESPN fiche ${m.eid} illisible`); }
+    }
+    for (const [file, x] of extra) {
+      net.espn.tried++;
+      const r = get(E.espnUrl(x.lg, x.date));
+      if (!r.ok) { net.espn.fail++; continue; }
+      try { files.push({ name: file, text: E.espnJsonToLines(JSON.parse(r.body)) }); net.espn.ok++; } catch (e) { net.espn.fail++; notes.push(`ESPN ${file} illisible`); }
+    }
+  }
   if (net.espn.tried && net.espn.ok === 0) {
     const list = E.fetchPlan(raw, M0, today, { max: 36 }).map((x) => Object.assign(x, { file: `fetched/${x.file}.jsonl` }));
     fs.writeFileSync(path.join(dir, "fetch_plan.json"), JSON.stringify({ today, prompt: E.FETCH_PROMPT, fetches: list }, null, 1));

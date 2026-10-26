@@ -40,6 +40,7 @@ test("ESPN brut → intégration : équipe inconnue rejetée, cotes ignorées ap
   const bad = espnEvent({ id: "999000002" });
   bad.competitions[0].competitors[0].team.displayName = "Équipe Imaginaire";
   bad.competitions[0].competitors[1].team.displayName = "Autre Inconnue";
+  bad.competitions[0].competitors[0].team.id = "990001"; bad.competitions[0].competitors[1].team.id = "990002";
   const text = E.espnJsonToLines({ events: [ev, bad] });
   const ing = E.ingestFiles(r, [{ name: "PL__2026-10-18", text }], "2026-10-18T20:00:00Z");
   assert.equal(ing.accepted, 1);
@@ -162,4 +163,21 @@ test("ESPN : équipe renommée (« Atlético de Madrid ») → rattachée au nom
   raw.espn.CL["401915392"] = ["401915392", "2026-10-20T19:00Z", "VfB Stuttgart", "Atlético Madrid", null, null, "S", 0, "", null, null, null, null, ""];
   raw.espn.CL.x = ["x", "2026-09-01T19:00Z", "Real Madrid", "Juventus", 1, 0, "F", 0, "", null, null, null, null, ""];
   assert.equal(FQ.ETL.ingestFiles(raw, [{ name: "CL__2026-10-20", text: bad }], "2026-10-21T05:00:00Z").rejected.length, 1);
+});
+
+test("ESPN : équipe renommée reconnue par son identifiant, résultat intégré sous le nom stocké", () => {
+  const r = raw();
+  r.espn.PL = r.espn.PL || {};
+  const row = Object.values(r.espn.PL).find((x) => x[10] && x[11]);
+  const id = "999000077";
+  r.espn.PL[id] = [id, "2026-10-18T13:00Z", row[2], row[3], null, null, "S", 0, "x", null, row[10], row[11], null, ""];
+  const ev = espnEvent({ id });
+  ev.competitions[0].competitors[0].team = { id: String(row[10]), displayName: row[2] + " (nouveau nom)" };
+  ev.competitions[0].competitors[1].team = { id: String(row[11]), displayName: row[3] + " de" };
+  ev.competitions[0].details = [];
+  const ing = E.ingestFiles(r, [{ name: "PL__2026-10-18", text: E.espnJsonToLines({ events: [ev] }) }], "2026-10-18T20:00:00Z");
+  assert.equal(ing.rejected.length, 0);
+  assert.equal(ing.newResults, 1);
+  assert.equal(r.espn.PL[id][2], row[2]);
+  assert.equal(r.espn.PL[id][4], 2);
 });

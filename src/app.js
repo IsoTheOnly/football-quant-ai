@@ -1499,9 +1499,13 @@ window.__fqStartApp = function () {
     const all = f.scope === "all";
     const list = (all ? openPicks : byDay[d] || []).slice().sort((a, b) => cmp(a, b) || kickMs(a) - kickMs(b));
     const inSlip = new Set(ctx.slip.map((x) => x.matchId));
-    const comps = COMP_ORDER.filter((c) => (state.picks || []).some((p) => p.status === "EN ATTENTE" && p.comp === c));
+    // toutes les compétitions suivies apparaissent dans le filtre ; sans match dans la fenêtre, la date du prochain match est indiquée
+    const nOpen = {}; for (const p of state.picks || []) if (p.status === "EN ATTENTE") nOpen[p.comp] = (nOpen[p.comp] || 0) + 1;
+    const nextOf = {}; for (const m of ctx.matches || []) if (m.status === "PROGRAMMÉ" && m.date >= today && (!nextOf[m.comp] || m.date < nextOf[m.comp])) nextOf[m.comp] = m.date;
+    const comps = COMP_ORDER.filter((c) => COMP[c] && (nOpen[c] || nextOf[c]));
+    const compLabel = (c) => COMP[c].name + (nOpen[c] ? ` (${nOpen[c]})` : nextOf[c] ? ` — prochain match le ${dFR(nextOf[c])}` : "");
     const total = openPicks.length;
-    return html`<${Card} eyebrow=${`Pronostics · ${H} prochains jours · ${total} match${total > 1 ? "s" : ""}${total < allOpen.length ? ` sur ${allOpen.length} (filtrés)` : ""}`} title="Un choix par match" right=${html`<select className="inp" aria-label="Compétition" value=${comp} onChange=${(e) => setComp(e.target.value)}><option value="ALL">Toutes les compétitions</option>${comps.map((c) => html`<option key=${c} value=${c}>${COMP[c].name}</option>`)}</select>`}>
+    return html`<${Card} eyebrow=${`Pronostics · ${H} prochains jours · ${total} match${total > 1 ? "s" : ""}${total < allOpen.length ? ` sur ${allOpen.length} (filtrés)` : ""}`} title="Un choix par match" right=${html`<select className="inp" aria-label="Compétition" value=${comp} onChange=${(e) => setComp(e.target.value)}><option value="ALL">Toutes les compétitions</option>${comps.map((c) => html`<option key=${c} value=${c}>${compLabel(c)}</option>`)}</select>`}>
       <div className="pick-tools">
         <div className="seg" role="radiogroup" aria-label="Période">${[["day", "Par jour"], ["all", "Les 14 jours"]].map(([k, l]) => html`<button key=${k} role="radio" aria-checked=${f.scope === k} className=${f.scope === k ? "on" : ""} onClick=${() => setF({ scope: k })}>${l}</button>`)}</div>
         <button className="link small" onClick=${() => openLegend("pronostic")}>Comment lire ?</button>
@@ -1524,7 +1528,7 @@ window.__fqStartApp = function () {
       ${!all && html`<div className="daybar" role="tablist" aria-label="Jour">${days.map((x) => { const n = (byDay[x] || []).length; return html`<button key=${x} role="tab" aria-selected=${x === d} className=${"dayb" + (x === d ? " on" : "") + (n ? "" : " off")} disabled=${!n} onClick=${() => setDay(x)}>
         <span className="dw">${x === today ? "auj." : new Date(x + "T12:00:00Z").toLocaleDateString("fr-FR", { weekday: "short" })}</span><span className="dn">${+x.slice(8)}</span><span className="dc">${n || "·"}</span></button>`; })}</div>`}
       <div className="day-h"><b className="cap">${all ? "Les 14 prochains jours" : dayLabel(d, today)}</b> <span className="muted small">· ${list.length} match${list.length > 1 ? "s" : ""}${f.sort !== "time" ? ` · ${(PICK_SORTS.find((x) => x[0] === f.sort) || [])[1].toLowerCase()}` : ""}</span></div>
-      ${!list.length ? html`<${Empty} icon="CalendarX">Aucun match${nFilters ? " avec ces filtres" : " analysé"}${all ? "" : " ce jour-là"}${comp !== "ALL" ? " dans cette compétition" : ""}.<//>` :
+      ${!list.length ? html`<${Empty} icon="CalendarX">Aucun match${nFilters ? " avec ces filtres" : " analysé"}${all ? "" : " ce jour-là"}${comp !== "ALL" ? " dans cette compétition" : ""}.${comp !== "ALL" && !nOpen[comp] && nextOf[comp] ? ` Prochain match de ${COMP[comp].name} le ${dFR(nextOf[comp])} : ses pronostics apparaîtront ${H} jours avant.` : ""}<//>` :
       html`<div className="mlist">${list.map((p) => { const added = inSlip.has(p.matchId); const m = ctx.matchById.get(p.matchId); return html`<div key=${p.id} className="mcard">
         <div className="mc-time">${all && html`<span className="tiny muted cap">${shortDay(p.date)}</span>`}<b className="mono">${koText(ctx, p, false)}</b><span className="comp-tag">${SHORT[p.comp] || p.comp}</span></div>
         <div className="mc-main min-w-0">

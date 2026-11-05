@@ -402,3 +402,16 @@ test("simulation Claude : match sans cote publiée → cote estimée = cote just
   const c2 = P.claudeSimEstCands(ctxFor([m2], state), { start: "2026-10-16", to: "2026-10-19" }, Date.now());
   assert.equal(c2.length, 0);
 });
+
+test("simulation Claude : un ticket choisi est placé et n'est plus jamais remplacé", () => {
+  const m = match({ id: "P1", date: "2026-10-20", status: "PROGRAMMÉ" });
+  const state = FQ.emptyState(); state.settings = Object.assign({}, FQ.DEFAULT_SETTINGS);
+  const ctx = ctxFor([m], state);
+  P.updateClaudeSim(ctx, {});
+  const sim = state.claudeSim;
+  // ancien ticket non figé (règle d'avant le 05/11) : il est figé tel quel, sans être remplacé
+  sim.tickets.push({ id: "old", status: "EN ATTENTE", frozen: false, legs: [{ matchId: "P1", market: "1N2", sel: "1", odds: 2.1, status: "EN ATTENTE" }], totalOdds: 2.1, stake: 100, run: 1 });
+  P.updateClaudeSim(ctx, {});
+  assert.equal(sim.tickets.length, 1); assert.equal(sim.tickets[0].id, "old"); assert.equal(sim.tickets[0].frozen, true); assert.equal(sim.tickets[0].totalOdds, 2.1);
+  assert.ok(Array.isArray(sim.notes) && /Monaco/.test(sim.notes[0]), "trace des tickets remplacés avant le changement de règle");
+});

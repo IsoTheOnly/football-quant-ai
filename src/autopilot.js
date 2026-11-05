@@ -1096,7 +1096,7 @@
    * Choix du ticket : celui qui a la plus grande chance de passer à cote ≥ 2 (à chance quasi égale, celui qui rapporte le plus),
    * sur les matchs des 3 prochains jours, cotes réelles d'un seul bookmaker (toutes les sélections jouables sur le même ticket),
    * sélections à 40 % ou plus (une sélection seule à cote 2 peut ainsi l'emporter sur un combiné), nul seulement s'il est très probable.
-   * Un seul ticket à la fois ; il est réoptimisé à chaque cycle jusqu'au premier coup d'envoi, puis figé.
+   * Un seul ticket à la fois ; il est placé (figé) dès qu'il est choisi, comme un vrai pari.
    */
   const CLAUDE_SIM = { start: 100, safeTarget: 400, goal: 1e6, safeShare: 0.5, horizonDays: 3, markets: ["1N2", "DC", "BTTS", "Buts"], estFactor: 0.9,
     // nombre de sélections libre (jusqu'à 15) et pas de cote maximale : seule contrainte, une cote totale d'au moins 2 ;
@@ -1160,6 +1160,11 @@
     if (s.settings && s.settings.claudeSim === false) return null;
     const now = new Date().toISOString(), nowMs = Date.now(), C = CLAUDE_SIM;
     const sim = claudeSimState(s, now);
+    // trace des tickets remplacés avant le changement de règle du 05/11 (ils n'avaient pas été journalisés)
+    if (!sim.notes && sim.startedAt && sim.startedAt < "2026-11-05") sim.notes = ["Jusqu'au 05/11, le ticket était réoptimisé jusqu'au premier coup d'envoi et les tickets remplacés n'étaient pas journalisés : "
+      + "Monaco – Lille (Monaco à 2,00, choisi le 22/10 ; 1-1, il aurait perdu) a été remplacé le 23/10 par Racing Santander – Espanyol (gagné) ; "
+      + "Coritiba – Vitória (Coritiba à 2,03, choisi le 26/10 ; match reporté au 31/10, gagné 2-0) a été remplacé par Preston – Sheffield United. "
+      + "Depuis le 05/11, chaque ticket est placé dès qu'il est choisi et ne change plus ; un match reporté est annulé (cote 1), comme chez les bookmakers."];
     const run = () => sim.runs[sim.runs.length - 1];
     // 1. règlement du ticket en cours et mise à jour du capital
     for (const t of sim.tickets) if (t.status === "EN ATTENTE" || (t.status === "À VÉRIFIER" && !t.manualStatus)) settleTicket(ctx, t, now);
@@ -1184,20 +1189,20 @@
         sim.runs.push({ n: sim.run, start: now, end: null, peak: C.start, tickets: 0, won: 0, safe: 0, result: null });
       }
     }
-    // 2. ticket en cours : figé au premier coup d'envoi, sinon réoptimisé
-    const started = (t) => t.legs.some((l) => { const m = ctx.matchById ? ctx.matchById.get(l.matchId) : null; return m ? kickoffPassed(m, nowMs) : l.date < ctx.today; });
+    // 2. un ticket est « placé » dès qu'il est choisi (cote et sélections figées, comme un vrai pari) : il n'est plus jamais remplacé.
+    //    (avant le 05/11, il était réoptimisé jusqu'au premier coup d'envoi : Monaco–Lille puis Coritiba–Vitória ont été remplacés sans trace)
+    //    Match reporté : sélection annulée (cote 1), règle des bookmakers ; tout le ticket annulé → mise rendue.
     let open = sim.tickets.find((t) => t.status === "EN ATTENTE" || t.status === "À VÉRIFIER");
-    if (open && !open.frozen && started(open)) { open.frozen = true; open.frozenAt = now; }
-    if (open && open.frozen) return sim;
+    if (open && !open.frozen) { open.frozen = true; open.frozenAt = now; open.placedAt = open.placedAt || now; }
+    if (open) return sim;
     if (run().result === "objectif atteint") return sim;
     const tk = claudeSimPick(ctx, nowMs);
-    if (!tk) { if (open) { sim.tickets.splice(sim.tickets.indexOf(open), 1); run().tickets--; } sim.wait = { at: now, reason: "aucun ticket de cote ≥ 2 jouable chez un seul bookmaker sur les 3 prochains jours" }; return sim; }
+    if (!tk) { sim.wait = { at: now, reason: "aucun ticket de cote ≥ 2 jouable chez un seul bookmaker sur les 3 prochains jours" }; return sim; }
     delete sim.wait;
     const body = { label: C.sc.label, scenario: C.sc.id, run: sim.run, book: tk.book, bookName: tk.book ? FR_NAMES()[tk.book] : null, legs: tk.legs.map(legOfCand), totalOdds: r2(tk.totalOdds),
       pJoint: tk.pJoint, pRobust: tk.pRobust, ev: tk.ev, stake: sim.capital, byN: (tk.byN || []).map((x) => ({ n: x.n, p: x.pJoint, odds: x.totalOdds })), updatedAt: now };
     body.why = claudeSimWhy(Object.assign({}, tk, { legs: body.legs }), sim);
-    if (open) { Object.assign(open, body); open.revisions = (open.revisions || 0) + 1; }
-    else { sim.tickets.push(Object.assign({ id: U.uid("cs"), createdAt: now, status: "EN ATTENTE", frozen: false, profit: 0, revisions: 0 }, body)); run().tickets++; }
+    sim.tickets.push(Object.assign({ id: U.uid("cs"), createdAt: now, placedAt: now, status: "EN ATTENTE", frozen: true, frozenAt: now, profit: 0, revisions: 0 }, body)); run().tickets++;
     return sim;
   }
 

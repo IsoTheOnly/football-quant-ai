@@ -416,29 +416,28 @@ test("simulation Claude : un ticket choisi est placé et n'est plus jamais rempl
   assert.ok(Array.isArray(sim.notes) && /Monaco/.test(sim.notes[0]), "trace des tickets remplacés avant le changement de règle");
 });
 
-test("simulation Claude : Monaco – Lille compté comme placé (parcours n° 2 perdu), le parcours en cours devient le n° 3, une seule fois", () => {
+test("simulation Claude : Monaco – Lille, premier ticket, compté comme placé (parcours n° 1 perdu) ; parcours renumérotés, une seule fois", () => {
   const mon = match({ id: "ML", date: "2026-10-25", home: "AS Monaco", away: "Lille", status: "TERMINÉ", hg: 1, ag: 1 });
   const state = FQ.emptyState(); state.settings = Object.assign({}, FQ.DEFAULT_SETTINGS);
   const ctx = ctxFor([mon], state);
-  state.claudeSim = { startedAt: "2026-10-22T05:00:00.000Z", run: 2, capital: 117.5, runSafe: 231.5, safe: 231.5, injected: 200, peak: 300,
-    runs: [{ n: 1, start: "2026-10-22T05:00:00.000Z", end: "2026-10-22T21:00:00.000Z", peak: 100, tickets: 1, won: 0, safe: 0, result: "capital perdu" },
-      { n: 2, start: "2026-10-22T21:00:00.000Z", end: null, peak: 300, tickets: 3, won: 2, safe: 231.5, result: null }],
-    tickets: [{ id: "a", run: 1, status: "PERDU", applied: true, createdAt: "2026-10-22T05:00:00.000Z", legs: [], totalOdds: 2, stake: 100 },
-      { id: "b", run: 2, status: "GAGNÉ", applied: true, createdAt: "2026-10-23T05:00:00.000Z", legs: [], totalOdds: 2.1, stake: 100 },
+  state.claudeSim = { startedAt: "2026-10-22T19:00:00.000Z", run: 2, capital: 117.5, runSafe: 231.5, safe: 231.5, injected: 200, peak: 300, fixes: ["monaco_run2"],
+    runs: [{ n: 1, start: "2026-10-22T19:00:00.000Z", end: "2026-11-01T21:00:00.000Z", peak: 200, tickets: 3, won: 2, safe: 100, result: "capital perdu" },
+      { n: 2, start: "2026-11-01T21:00:00.000Z", end: null, peak: 300, tickets: 3, won: 2, safe: 131.5, result: null }],
+    tickets: [{ id: "a", run: 1, status: "GAGNÉ", applied: true, createdAt: "2026-10-23T05:00:00.000Z", legs: [], totalOdds: 2, stake: 100 },
+      { id: "b", run: 1, status: "PERDU", applied: true, createdAt: "2026-10-30T05:00:00.000Z", legs: [], totalOdds: 2.1, stake: 100 },
       { id: "c", run: 2, status: "EN ATTENTE", frozen: true, createdAt: "2026-11-10T05:00:00.000Z", legs: [{ matchId: "zz", market: "1N2", sel: "1", odds: 2, status: "EN ATTENTE" }], totalOdds: 2, stake: 117.5 }],
-    log: [{ ticket: "a", run: 1 }, { ticket: "b", run: 2 }] };
+    log: [{ ticket: "a", run: 1 }, { ticket: "b", run: 1 }] };
   P.updateClaudeSim(ctx, {});
   const sim = state.claudeSim;
   assert.equal(sim.run, 3); assert.equal(sim.injected, 300); assert.equal(sim.capital, 117.5); assert.equal(sim.safe, 231.5);
-  assert.deepEqual(sim.runs.map((r) => r.n), [1, 2, 3]); assert.equal(sim.runs[1].result, "capital perdu");
+  assert.deepEqual(sim.runs.map((r) => r.n), [1, 2, 3]); assert.equal(sim.runs[0].result, "capital perdu"); assert.equal(sim.runs[0].tickets, 1);
   const mt = sim.tickets.find((t) => t.reconstructed === "monaco");
-  assert.ok(mt && mt.run === 2 && mt.status === "PERDU" && mt.legs[0].score === "1-1");
-  assert.deepEqual(sim.tickets.map((t) => t.id), ["a", "cs_monaco_lille", "b", "c"]);
-  assert.equal(sim.tickets.find((t) => t.id === "c").run, 3);
+  assert.ok(mt && mt.run === 1 && mt.status === "PERDU" && mt.legs[0].score === "1-1");
+  assert.deepEqual(sim.tickets.map((t) => t.id + ":" + t.run), ["cs_monaco_lille:1", "a:2", "b:2", "c:3"]);
   P.updateClaudeSim(ctx, {});
   assert.equal(sim.run, 3); assert.equal(sim.injected, 300); assert.equal(sim.tickets.length, 4);
   // une page restée ouverte sur l'ancien état ne l'annule plus à la fusion
-  const stale = FQ.emptyState(); stale.claudeSim = { run: 2, injected: 200, tickets: [], log: [{}, {}], runs: [] };
+  const stale = FQ.emptyState(); stale.claudeSim = { run: 2, injected: 200, tickets: [], log: [{}, {}], runs: [], fixes: ["monaco_run2"] };
   assert.equal(FQ.mergeStates(stale, state).state.claudeSim.run, 3);
   assert.equal(FQ.mergeStates(state, stale).state.claudeSim.run, 3);
 });

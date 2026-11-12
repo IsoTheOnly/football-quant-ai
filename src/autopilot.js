@@ -1172,37 +1172,41 @@
     return `${n} match${n > 1 ? "s" : ""} d'ici le ${d(to)}, mais aucun ticket de cote ≥ 2 jouable chez un seul bookmaker (chance par sélection ≥ ${Math.round(100 * CLAUDE_SIM.sc.legPMin)} %, fiabilité suffisante)`;
   }
   /**
-   * Correction demandée par Iso le 05/11 (appliquée une fois, marquée dans sim.fixes) : le ticket Monaco – Lille, choisi le 22/10
-   * pour le parcours n° 2 puis remplacé sans trace, compte comme placé ; il a perdu (nul), il termine donc le parcours n° 2 ;
-   * le parcours suivant (100 € neufs, premier ticket Racing Santander – Espanyol) devient le n° 3. Le capital ne change pas.
-   * Écrite en code (et non plus seulement dans l'état) pour ne plus être annulée par une sauvegarde de la page sur un état ancien.
+   * Correction demandée par Iso le 05/11 (appliquée une fois, marquée dans sim.fixes) : le ticket Monaco – Lille (Monaco à 2,00),
+   * tout premier ticket de la simulation, choisi le 22/10 puis remplacé sans trace, compte comme placé ; il a perdu (1-1) et termine
+   * donc à lui seul le premier parcours. Les parcours suivants sont renumérotés (+1) ; 100 € de plus sont comptés comme misés.
+   * Le capital et le coffre ne changent pas. Écrite en code pour ne plus être annulée par une sauvegarde de la page sur un état ancien.
+   * (Une première version, « monaco_run2 », visait à tort le parcours n° 2 et n'a rien modifié.)
    */
   function claudeSimFixMonaco(ctx, sim, now) {
     sim.fixes = sim.fixes || [];
-    if (sim.fixes.includes("monaco_run2") || !sim.startedAt || sim.startedAt >= "2026-11-05") return;
-    const r2i = sim.runs.findIndex((r) => r.n === 2);
-    if (r2i < 0 || (sim.runs[r2i].start || "") >= "2026-10-24") { sim.fixes.push("monaco_run2"); return; }
-    if (sim.tickets.some((t) => t.reconstructed === "monaco")) { sim.fixes.push("monaco_run2"); return; }
-    const k = (x) => String(x || "").toLowerCase();
-    const m = ctx.matches.find((x) => /monaco/.test(k(x.home)) && /lille/.test(k(x.away)) && x.date >= "2026-10-22" && x.date <= "2026-10-28");
+    if (sim.fixes.includes("monaco_run1")) return;
+    // seule la simulation réelle, démarrée le 22/10, est concernée
+    if (!sim.startedAt || sim.startedAt < "2026-10-22" || sim.startedAt >= "2026-10-24") return;
+    if (sim.tickets.some((t) => t.reconstructed === "monaco")) { sim.fixes.push("monaco_run1"); return; }
+    // parcours en cours le 22/10, quand Monaco – Lille a été choisi
+    let k = -1; sim.runs.forEach((r, i) => { if ((r.start || "") < "2026-10-23") k = i; });
+    if (k < 0) return;
+    const old = sim.runs[k], nM = old.n;
+    const kx = (x) => String(x || "").toLowerCase();
+    const m = ctx.matches.find((x) => /monaco/.test(kx(x.home)) && /lille/.test(kx(x.away)) && x.date >= "2026-10-22" && x.date <= "2026-10-28");
     const res = m && ctx.state.results[m.id];
-    const hg = res && U.isNum(res.hg) ? res.hg : m ? m.hg : 1, ag = res && U.isNum(res.ag) ? res.ag : m ? m.ag : 1;
-    const day = m ? m.date : "2026-10-25", old = sim.runs[r2i];
-    for (const r of sim.runs) if (r.n >= 2) r.n++;
-    for (const t of sim.tickets) if (t.run >= 2) t.run++;
-    for (const l of sim.log) if (l.run >= 2) l.run++;
-    const runM = { n: 2, start: old.start, end: day + "T23:00:00.000Z", peak: CLAUDE_SIM.start, tickets: 1, won: 0, safe: 0, result: "capital perdu", reconstructed: true };
-    sim.runs.splice(r2i, 0, runM);
-    old.start = runM.end;
-    const tk = { id: "cs_monaco_lille", reconstructed: "monaco", run: 2, label: CLAUDE_SIM.sc.label, scenario: CLAUDE_SIM.sc.id, createdAt: "2026-10-22T18:00:00.000Z", placedAt: "2026-10-22T18:00:00.000Z",
+    const hg = res && U.isNum(res.hg) ? res.hg : m && U.isNum(m.hg) ? m.hg : 1, ag = res && U.isNum(res.ag) ? res.ag : m && U.isNum(m.ag) ? m.ag : 1;
+    const day = m ? m.date : "2026-10-25";
+    for (const r of sim.runs) if (r.n >= nM) r.n++;
+    for (const t of sim.tickets) if (t.run >= nM) t.run++;
+    for (const l of sim.log) if (l.run >= nM) l.run++;
+    const runM = { n: nM, start: old.start, end: day + "T23:00:00.000Z", peak: CLAUDE_SIM.start, tickets: 1, won: 0, safe: 0, result: "capital perdu", reconstructed: true };
+    sim.runs.splice(k, 0, runM);
+    const tk = { id: "cs_monaco_lille", reconstructed: "monaco", run: nM, label: CLAUDE_SIM.sc.label, scenario: CLAUDE_SIM.sc.id, createdAt: old.start, placedAt: old.start,
       frozen: true, status: "PERDU", applied: true, settledAt: runM.end, stake: CLAUDE_SIM.start, totalOdds: 2, settledOdds: 2, profit: -CLAUDE_SIM.start, toSafe: 0,
       legs: [{ matchId: m ? m.id : null, date: day, comp: "FL1", home: m ? m.home : "Monaco", away: m ? m.away : "Lille", market: "1N2", label: (m ? m.home : "Monaco") + " gagne", odds: 2, status: "PERDU", score: `${hg}-${ag}` }],
-      after: { capital: 0, runSafe: 0, safe: sim.safe }, reason: "Ticket reconstitué : choisi le 22/10, remplacé sans trace avant la règle du 05/11 ; compté comme placé à la demande d'Iso.", updatedAt: now };
-    const before = sim.tickets.findIndex((t) => (t.createdAt || "") > tk.createdAt);
-    if (before < 0) sim.tickets.push(tk); else sim.tickets.splice(before, 0, tk);
-    sim.log.push({ at: now, ticket: tk.id, run: 2, status: "PERDU", stake: CLAUDE_SIM.start, odds: 2, before: { capital: CLAUDE_SIM.start, runSafe: 0 }, after: tk.after, reconstructed: true });
+      after: { capital: 0, runSafe: 0, safe: 0 }, reason: "Ticket reconstitué : premier ticket de la simulation, choisi le 22/10 puis remplacé sans trace avant la règle du 05/11 ; compté comme placé à la demande d'Iso.", updatedAt: now };
+    const at = sim.tickets.findIndex((t) => (t.createdAt || "") >= tk.createdAt);
+    if (at < 0) sim.tickets.push(tk); else sim.tickets.splice(at, 0, tk);
+    sim.log.push({ at: now, ticket: tk.id, run: nM, status: "PERDU", stake: CLAUDE_SIM.start, odds: 2, before: { capital: CLAUDE_SIM.start, runSafe: 0 }, after: tk.after, reconstructed: true });
     sim.run++; sim.injected = r2(sim.injected + CLAUDE_SIM.start);
-    sim.fixes.push("monaco_run2");
+    sim.fixes.push("monaco_run1");
   }
   function updateClaudeSim(ctx, rep) {
     const s = ctx.state;
@@ -1546,7 +1550,7 @@
     const tkBefore = JSON.stringify((s.paperTickets || []).map((t) => [t.id, t.status, t.updatedAt, t.frozen]).concat((s.realBets || []).map((t) => [t.id, t.status])));
     updateTickets(ctx, rep);
     const cs = updateClaudeSim(ctx, rep);
-    if (cs) rep.claudeSim = { run: cs.run, capital: cs.capital, safe: cs.safe, injected: cs.injected };
+    if (cs) rep.claudeSim = { run: cs.run, capital: cs.capital, safe: cs.safe, injected: cs.injected, startedAt: cs.startedAt, fixes: cs.fixes, runStarts: (cs.runs || []).map((r) => (r.start || "").slice(0, 10)), open: !!(cs.tickets || []).find((t) => t.status === "EN ATTENTE"), wait: cs.wait ? cs.wait.reason : null };
     rep.clv = updateClv(ctx);
     rep.journal = updateJournal(ctx);
     rep.forecasts = logForecasts(ctx);

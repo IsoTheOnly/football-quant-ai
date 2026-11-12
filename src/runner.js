@@ -59,7 +59,11 @@ if (CMD === "summary") {
   const win = FQ.P.ticketWindow(today, state.settings);
   const tks = (state.paperTickets || []).filter((t) => t.week === win.week).sort((a, b) => (a.totalOdds < b.totalOdds ? -1 : 1));
   const lines = [`Tickets de la semaine (${win.from} → ${win.to}) :`];
-  if (!tks.length) lines.push("- aucun ticket construit pour l'instant (pas assez de matchs avec cotes réelles).");
+  if (!tks.length) {
+    const wi = state.ticketWeek && state.ticketWeek.week === win.week ? state.ticketWeek : null, next = wi && wi.next;
+    lines.push(!wi || wi.nMatches ? "- aucun ticket construit pour l'instant (pas assez de matchs avec cotes réelles)."
+      : `- aucun match des compétitions suivies du ${win.start} au ${win.to} (trêve internationale) : pas de ticket cette semaine${next ? ", reprise le " + next : ""}.`);
+  }
   for (const t of tks) {
     lines.push(`- ${t.label} : ${t.legs.length} sélection(s), cote ${fr(t.totalOdds)} chez ${t.bookName || "—"}, chance estimée ${fr(100 * t.pJoint, 1)} % (${t.status === "EN ATTENTE" ? (t.frozen ? "en cours" : "modifiable jusqu'au 1er coup d'envoi") : t.status.toLowerCase()})`);
     if (Array.isArray(t.byN) && t.byN.length > 1) lines.push(`    chance selon le nombre de sélections : ${t.byN.map((x) => `${x.n} → ${fr(100 * x.p, 1)} %`).join(", ")}`);
@@ -76,6 +80,7 @@ if (CMD === "summary") {
   if (cs) {
     const ot = (cs.tickets || []).find((t) => t.status === "EN ATTENTE");
     lines.push(`Simulation Claude (road to 1 M€) : parcours n° ${cs.run}, capital en jeu ${fr(cs.capital)} €, coffre ${fr(cs.safe)} € pour ${fr(cs.injected)} € misés au total.`);
+    if (!ot && cs.wait) lines.push(`    pas de ticket en cours : ${cs.wait.reason}.`);
     if (ot) lines.push(`    ticket en cours : ${ot.legs.map((l) => `${l.home} – ${l.away} : ${l.label} @ ${fr(l.odds)}`).join(" + ")} (cote ${fr(ot.totalOdds)} chez ${ot.bookName || "—"}, chance ${fr(100 * ot.pJoint, 1)} %)`);
   }
   if (state.coverage && state.coverage.nIssues) lines.push(`Couverture 14 jours : ${state.coverage.nIssues} point(s) à vérifier (${[...new Set(state.coverage.issues.map((x) => x.kind))].join(", ")}).`);

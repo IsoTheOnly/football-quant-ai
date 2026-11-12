@@ -973,6 +973,8 @@
     s.shadowTickets = s.shadowTickets.filter((t) => t.week >= U.addDays(ctx.today, -400));
     if (s.settings.paperTickets === false) return;
     const win = ticketWindow(ctx.today, s.settings);
+    { const nowMs = Date.now(); // nombre de matchs de la fenêtre (trêve internationale : 0) et prochain match après elle, pour le résumé
+      s.ticketWeek = { week: win.week, nMatches: ctx.matches.filter((m) => m.status === "PROGRAMMÉ" && m.date >= win.start && m.date <= win.to && !kickoffPassed(m, nowMs)).length, next: nextScheduled(ctx, U.addDays(win.to, 1), nowMs) }; }
     if (!win.open) return;
     learnDcFactor(s);
     const bf = boostFn(s);
@@ -1155,6 +1157,53 @@
       (ne ? `${ne} sélection${ne > 1 ? "s" : ""} sans cote publiée : cote estimée = cote juste du modèle − 10 % (à vérifier chez le bookmaker). ` : "") +
       `Tout le capital du parcours n° ${sim.run} est misé (${r2(sim.capital)} €) : une perte termine le parcours, un gain met ${sim.runSafe < CLAUDE_SIM.safeTarget ? "50 % du capital au coffre" : "tout le capital en jeu (coffre plein)"}.`;
   }
+  /** Prochain match programmé des compétitions suivies (pour expliquer une attente : trêve internationale, etc.) */
+  function nextScheduled(ctx, from, nowMs) {
+    let best = null;
+    for (const m of ctx.matches) if (m.status === "PROGRAMMÉ" && m.date >= from && !kickoffPassed(m, nowMs) && (!best || m.date < best)) best = m.date;
+    return best;
+  }
+  function claudeSimWaitReason(ctx, nowMs) {
+    const to = U.addDays(ctx.today, CLAUDE_SIM.horizonDays);
+    const n = ctx.matches.filter((m) => m.status === "PROGRAMMÉ" && m.date >= ctx.today && m.date <= to && !kickoffPassed(m, nowMs)).length;
+    const next = nextScheduled(ctx, ctx.today, nowMs), d = (x) => x.slice(8, 10) + "/" + x.slice(5, 7);
+    if (!n && next) return `aucun match des compétitions suivies d'ici le ${d(to)} (trêve internationale) : prochain match le ${d(next)}, le ticket sera choisi à partir du ${d(U.addDays(next, -CLAUDE_SIM.horizonDays) > ctx.today ? U.addDays(next, -CLAUDE_SIM.horizonDays) : ctx.today)}, quand ce match entre dans la fenêtre de ${CLAUDE_SIM.horizonDays} jours`;
+    if (!n) return "aucun match programmé dans les compétitions suivies";
+    return `${n} match${n > 1 ? "s" : ""} d'ici le ${d(to)}, mais aucun ticket de cote ≥ 2 jouable chez un seul bookmaker (chance par sélection ≥ ${Math.round(100 * CLAUDE_SIM.sc.legPMin)} %, fiabilité suffisante)`;
+  }
+  /**
+   * Correction demandée par Iso le 05/11 (appliquée une fois, marquée dans sim.fixes) : le ticket Monaco – Lille, choisi le 22/10
+   * pour le parcours n° 2 puis remplacé sans trace, compte comme placé ; il a perdu (nul), il termine donc le parcours n° 2 ;
+   * le parcours suivant (100 € neufs, premier ticket Racing Santander – Espanyol) devient le n° 3. Le capital ne change pas.
+   * Écrite en code (et non plus seulement dans l'état) pour ne plus être annulée par une sauvegarde de la page sur un état ancien.
+   */
+  function claudeSimFixMonaco(ctx, sim, now) {
+    sim.fixes = sim.fixes || [];
+    if (sim.fixes.includes("monaco_run2") || !sim.startedAt || sim.startedAt >= "2026-11-05") return;
+    const r2i = sim.runs.findIndex((r) => r.n === 2);
+    if (r2i < 0 || (sim.runs[r2i].start || "") >= "2026-10-24") { sim.fixes.push("monaco_run2"); return; }
+    if (sim.tickets.some((t) => t.reconstructed === "monaco")) { sim.fixes.push("monaco_run2"); return; }
+    const k = (x) => String(x || "").toLowerCase();
+    const m = ctx.matches.find((x) => /monaco/.test(k(x.home)) && /lille/.test(k(x.away)) && x.date >= "2026-10-22" && x.date <= "2026-10-28");
+    const res = m && ctx.state.results[m.id];
+    const hg = res && U.isNum(res.hg) ? res.hg : m ? m.hg : 1, ag = res && U.isNum(res.ag) ? res.ag : m ? m.ag : 1;
+    const day = m ? m.date : "2026-10-25", old = sim.runs[r2i];
+    for (const r of sim.runs) if (r.n >= 2) r.n++;
+    for (const t of sim.tickets) if (t.run >= 2) t.run++;
+    for (const l of sim.log) if (l.run >= 2) l.run++;
+    const runM = { n: 2, start: old.start, end: day + "T23:00:00.000Z", peak: CLAUDE_SIM.start, tickets: 1, won: 0, safe: 0, result: "capital perdu", reconstructed: true };
+    sim.runs.splice(r2i, 0, runM);
+    old.start = runM.end;
+    const tk = { id: "cs_monaco_lille", reconstructed: "monaco", run: 2, label: CLAUDE_SIM.sc.label, scenario: CLAUDE_SIM.sc.id, createdAt: "2026-10-22T18:00:00.000Z", placedAt: "2026-10-22T18:00:00.000Z",
+      frozen: true, status: "PERDU", applied: true, settledAt: runM.end, stake: CLAUDE_SIM.start, totalOdds: 2, settledOdds: 2, profit: -CLAUDE_SIM.start, toSafe: 0,
+      legs: [{ matchId: m ? m.id : null, date: day, comp: "FL1", home: m ? m.home : "Monaco", away: m ? m.away : "Lille", market: "1N2", label: (m ? m.home : "Monaco") + " gagne", odds: 2, status: "PERDU", score: `${hg}-${ag}` }],
+      after: { capital: 0, runSafe: 0, safe: sim.safe }, reason: "Ticket reconstitué : choisi le 22/10, remplacé sans trace avant la règle du 05/11 ; compté comme placé à la demande d'Iso.", updatedAt: now };
+    const before = sim.tickets.findIndex((t) => (t.createdAt || "") > tk.createdAt);
+    if (before < 0) sim.tickets.push(tk); else sim.tickets.splice(before, 0, tk);
+    sim.log.push({ at: now, ticket: tk.id, run: 2, status: "PERDU", stake: CLAUDE_SIM.start, odds: 2, before: { capital: CLAUDE_SIM.start, runSafe: 0 }, after: tk.after, reconstructed: true });
+    sim.run++; sim.injected = r2(sim.injected + CLAUDE_SIM.start);
+    sim.fixes.push("monaco_run2");
+  }
   function updateClaudeSim(ctx, rep) {
     const s = ctx.state;
     if (s.settings && s.settings.claudeSim === false) return null;
@@ -1166,6 +1215,7 @@
       + "Coritiba – Vitória (Coritiba à 2,03, choisi le 26/10 ; match reporté au 31/10, gagné 2-0) a été remplacé par Preston – Sheffield United. "
       + "Depuis le 05/11, chaque ticket est placé dès qu'il est choisi et ne change plus ; un match reporté est annulé (cote 1), comme chez les bookmakers."];
     const run = () => sim.runs[sim.runs.length - 1];
+    claudeSimFixMonaco(ctx, sim, now);
     // 1. règlement du ticket en cours et mise à jour du capital
     for (const t of sim.tickets) if (t.status === "EN ATTENTE" || (t.status === "À VÉRIFIER" && !t.manualStatus)) settleTicket(ctx, t, now);
     for (const t of sim.tickets) {
@@ -1197,7 +1247,7 @@
     if (open) return sim;
     if (run().result === "objectif atteint") return sim;
     const tk = claudeSimPick(ctx, nowMs);
-    if (!tk) { sim.wait = { at: now, reason: "aucun ticket de cote ≥ 2 jouable chez un seul bookmaker sur les 3 prochains jours" }; return sim; }
+    if (!tk) { sim.wait = { at: now, reason: claudeSimWaitReason(ctx, nowMs) }; return sim; }
     delete sim.wait;
     const body = { label: C.sc.label, scenario: C.sc.id, run: sim.run, book: tk.book, bookName: tk.book ? FR_NAMES()[tk.book] : null, legs: tk.legs.map(legOfCand), totalOdds: r2(tk.totalOdds),
       pJoint: tk.pJoint, pRobust: tk.pRobust, ev: tk.ev, stake: sim.capital, byN: (tk.byN || []).map((x) => ({ n: x.n, p: x.pJoint, odds: x.totalOdds })), updatedAt: now };
@@ -1527,6 +1577,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { claudeSimEstCands, injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, CLAUDE_SIM, updateClaudeSim, claudeSimPick, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+  FQ.P = { claudeSimEstCands, claudeSimFixMonaco, claudeSimWaitReason, nextScheduled, injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, CLAUDE_SIM, updateClaudeSim, claudeSimPick, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
     SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, legOk, DRAW_PMIN, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

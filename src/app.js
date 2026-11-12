@@ -1398,6 +1398,11 @@ window.__fqStartApp = function () {
       return p && p.ticket ? { sc, t: Object.assign({ label: sc.label, scenario: sc.id, stake: sc.stake, strategyLabel: p.rule, reason: p.why || p.reason, bookName: p.bookName }, p.ticket, { legs: p.ticket.legs, byN: (p.ticket.byN || []).map((x) => ({ n: x.n, p: x.pJoint, odds: x.totalOdds })) }), preview: true } : { sc, t: null };
     });
     const bt = FQ.TRAINED && FQ.TRAINED.tickets;
+    // trêve internationale : aucun match des compétitions suivies dans la fenêtre → le dire plutôt que « pas assez de cotes »
+    const nowMs = Date.now(), nWin = (ctx.matches || []).filter((m) => m.status === "PROGRAMMÉ" && m.date >= win.start && m.date <= win.to && !FQ.P.kickoffPassed(m, nowMs)).length;
+    const nextM = !nWin && !mine.length ? FQ.P.nextScheduled(ctx, U.addDays(win.to, 1), nowMs) : null;
+    const nextThu = U.addDays(win.week, 7 + ((state.settings && state.settings.ticketFromDow) || 4) - 1);
+    const breakMsg = !nWin && !mine.length ? `Aucun match des compétitions suivies du ${shortDay(win.start)} au ${shortDay(win.to)} (trêve internationale) : pas de ticket cette semaine.${nextM ? ` Reprise le ${shortDay(nextM)} ; les prochains tickets sont construits ${nextThu > today ? "le " + shortDay(nextThu) : "dès que les cotes sont publiées"}.` : ""}` : null;
     return html`<${Card} eyebrow=${`Tickets de la semaine · ${shortDay(win.from)} → ${shortDay(win.to)}`} title="4 tickets, 4 niveaux de risque">
       <p className="muted small lead">${win.open
         ? "Construits sur les matchs du jeudi au dimanche, avec les cotes réelles publiées. Ils sont réoptimisés à chaque mise à jour jusqu'au premier coup d'envoi, puis figés et joués en paper betting (1 u fictive chacun)."
@@ -1405,6 +1410,7 @@ window.__fqStartApp = function () {
       <div className="tickets">${items.map(({ sc, t, preview, skipPrev }) => { const skip = skipPrev || (!t || preview ? (state.ticketSkip || {})[win.week + "|" + sc.id] : null);
         return t && !(skip && preview) ? html`<${TicketCard} key=${sc.id} ctx=${ctx} t=${t} sc=${sc} preview=${preview} />`
         : skip ? html`<article key=${sc.id} className=${"ticket tk-" + sc.id + " tk-empty"}><div className="tk-name">${sc.label}</div><div className="small"><b>Aucun ticket admissible cette semaine.</b></div><div className="muted small">${skip.reason}. La stratégie reste suivie en fantôme.</div></article>`
+        : breakMsg ? html`<article key=${sc.id} className=${"ticket tk-" + sc.id + " tk-empty"}><div className="tk-name">${sc.label}</div><div className="muted small">${breakMsg}</div></article>`
         : html`<article key=${sc.id} className=${"ticket tk-" + sc.id + " tk-empty"}><div className="tk-name">${sc.label}</div><div className="muted small">Pas encore assez de matchs avec cote pour viser une cote ${SC_HINT[sc.id]}. Les cotes arrivent environ 3 jours avant les matchs.</div></article>`; })}</div>
       <div className="mt-2 small"><button className="link small" onClick=${() => openLegend("ticket")}>Légende des tickets et lexique</button></div>
       <details className="mt-2 small"><summary className="muted">Comment lire ces tickets</summary>

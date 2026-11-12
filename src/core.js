@@ -82,6 +82,11 @@
   }
   FQ.dedupeTickets = dedupeTickets;
 
+  /** Avancement de la simulation Claude : corrections appliquées, puis tickets réglés, puis tickets choisis */
+  function simProgress(sim) {
+    const t = sim.tickets || [];
+    return (sim.fixes || []).length * 1e8 + (sim.log || []).length * 1e4 + t.filter((x) => x.applied).length * 100 + t.length;
+  }
   function mergeStates(cur, inc) {
     const out = JSON.parse(JSON.stringify(cur));
     let added = 0, dup = 0;
@@ -101,6 +106,8 @@
       }
     }
     out.paperTickets = dedupeTickets(out.paperTickets);
+    // simulation Claude : l'état le plus avancé l'emporte (une page restée ouverte sur un état ancien ne doit plus l'annuler)
+    if (inc.claudeSim && (!out.claudeSim || simProgress(inc.claudeSim) > simProgress(out.claudeSim))) out.claudeSim = JSON.parse(JSON.stringify(inc.claudeSim));
     out.deletedReal = Array.from(new Set((out.deletedReal || []).concat(inc.deletedReal || [])));
     out.realBets = (out.realBets || []).filter((x) => !out.deletedReal.includes(x.id));
     for (const [id, r] of Object.entries(inc.results || {})) { if (out.results[id]) dup++; else { out.results[id] = r; added++; } }
@@ -108,6 +115,7 @@
     return { state: out, added, dup };
   }
   FQ.mergeStates = mergeStates;
+  FQ.simProgress = simProgress;
 
   /* ------------------------------------------------------------ persistance */
   const CHUNK = 150000;

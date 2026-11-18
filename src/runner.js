@@ -92,6 +92,12 @@ if (CMD === "summary") {
   console.log(lines.join("\n"));
   process.exit(0);
 }
+if (CMD === "stats") {
+  const state = loadState();
+  if (!state) { console.log("{}"); process.exit(0); }
+  console.log(JSON.stringify(FQ.P.liveStats(state)));
+  process.exit(0);
+}
 if (CMD !== "run") { console.error("commande inconnue : " + CMD); process.exit(1); }
 
 /* ------------------------------------------------------------------ magasin brut */
@@ -312,7 +318,8 @@ const rawTxt = gzip(JSON.stringify(raw));
 const rIds = put("r", rawTxt);
 let tIds = meta && meta.trainChunks, tLen = meta && meta.trainLen;
 if (retrained || trainedFromSeed || !tIds) { const tt = gzip(JSON.stringify(trained)); tIds = put("t", tt); tLen = tt.length; }
-const report = { at: new Date().toISOString(), today, report: rep, ingest: Object.assign({}, ingest, { rejected: ingest.rejected.slice(0, 20) }), net, odds: oddsInfo, retrained, notes, lastResult: lastDate, runner: "github" };
+let live = null; try { live = FQ.P.liveStats(state); } catch (e) { notes.push("bilan indisponible : " + e.message); }
+const report = { at: new Date().toISOString(), today, report: rep, live, ingest: Object.assign({}, ingest, { rejected: ingest.rejected.slice(0, 20) }), net, odds: oddsInfo, retrained, notes, lastResult: lastDate, runner: "github" };
 const newMeta = Object.assign({}, meta || {}, { rev, schemaData: 2, stateChunks: sIds, stateLen: stateTxt.length, stateGz: true, rawChunks: rIds, rawLen: rawTxt.length,
   trainChunks: tIds, trainLen: tLen, trainedAt: trained.generatedAt, updatedAt: new Date().toISOString(), by: "tâche planifiée", tab: null, lastJob: report });
 const planId = `plan_g${rev}`;

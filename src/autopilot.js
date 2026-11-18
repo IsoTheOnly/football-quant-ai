@@ -1467,6 +1467,45 @@
     return { n: list.length, done: done.length, won: done.filter((b) => b.status === "GAGNÉ").length, staked: Math.round(staked * 100) / 100, profit: Math.round(profit * 100) / 100, expected: Math.round(done.reduce((a, b) => a + (U.isNum(b.pJoint) ? b.pJoint : 0), 0) * 100) / 100 };
   }
 
+  /* ----------------------------------------------- bilan en conditions réelles (compact, pour le rapport) */
+  /**
+   * Tout ce qui a été joué en paper betting depuis le lancement, en chiffres : choix du modèle, tickets par niveau et par stratégie,
+   * qualité des probabilités face au marché (log-loss), cote de clôture (CLV), paris d'Iso, simulation Claude. Quelques Ko.
+   */
+  function liveStats(s) {
+    const r3 = (x) => (U.isNum(x) ? Math.round(x * 1000) / 1000 : null);
+    const ci = (pl) => (FQ.T && FQ.T.bootRoi && pl.length >= 8 ? FQ.T.bootRoi(pl, 600) : null);
+    const book = (list, oddsOf, stakeOf) => {
+      const done = list.filter((x) => x.status === "GAGNÉ" || x.status === "PERDU");
+      const pl = done.map((x) => (x.status === "GAGNÉ" ? oddsOf(x) * stakeOf(x) - stakeOf(x) : -stakeOf(x)) / (stakeOf(x) || 1));
+      const clv = list.map((x) => x.clv && x.clv.ev).filter(U.isNum);
+      const pr = (x) => (U.isNum(x.p) ? x.p : U.isNum(x.pJoint) ? x.pJoint : null);
+      const exp = done.map(pr).filter(U.isNum);
+      return { n: list.length, done: done.length, won: done.filter((x) => x.status === "GAGNÉ").length, expectedWon: exp.length === done.length ? r3(exp.reduce((a, x) => a + x, 0)) : null,
+        avgOdds: done.length ? r3(done.reduce((a, x) => a + (oddsOf(x) || 0), 0) / done.length) : null, roi: pl.length ? r3(pl.reduce((a, x) => a + x, 0) / pl.length) : null, roiCI: ci(pl),
+        clvN: clv.length, clv: clv.length ? r3(clv.reduce((a, x) => a + x, 0) / clv.length) : null, clvBeat: clv.filter((x) => x > 0).length, clvCI: ci(clv) };
+    };
+    const odd1 = (x) => x.odds || 0, tOdd = (x) => (U.isNum(x.settledOdds) ? x.settledOdds : x.totalOdds) || 0, one = () => 1, stk = (x) => x.stake || 1;
+    const picks = (s.picks || []).filter((p) => p.odds > 1);
+    const byKind = {}; for (const p of picks) (byKind[p.kind || "choix"] = byKind[p.kind || "choix"] || []).push(p);
+    const bySc = {}; for (const t of s.paperTickets || []) (bySc[t.scenario] = bySc[t.scenario] || []).push(t);
+    const byArm = {}; for (const t of s.shadowTickets || []) (byArm[t.arm] = byArm[t.arm] || []).push(t);
+    const byComp = {}; for (const p of picks) (byComp[p.comp] = byComp[p.comp] || []).push(p);
+    const fe = (() => { try { return forecastEval(s); } catch (e) { return null; } })();
+    const cs = s.claudeSim;
+    const firstDay = [].concat(s.picks || [], s.paperTickets || []).map((x) => String(x.createdAt || "").slice(0, 10)).filter(Boolean).sort()[0] || null;
+    return { at: new Date().toISOString(), since: firstDay,
+      picks: book(picks, odd1, one), picksByKind: Object.fromEntries(Object.entries(byKind).map(([k, l]) => [k, book(l, odd1, one)])),
+      picksByComp: Object.fromEntries(Object.entries(byComp).map(([k, l]) => [k, (({ done, won, roi, clv, clvN }) => ({ done, won, roi, clv, clvN }))(book(l, odd1, one))])),
+      tickets: Object.fromEntries(Object.entries(bySc).map(([k, l]) => [k, book(l, tOdd, one)])),
+      shadow: Object.fromEntries(Object.entries(byArm).map(([k, l]) => [k, (({ done, won, expectedWon, roi }) => ({ done, won, expectedWon, roi }))(book(l, tOdd, one))])),
+      forecasts: fe ? { rows: fe.rows, since: fe.since, buckets: fe.buckets.map((b) => ({ b: b.b, n: b.n, llF: r3(b.llF), llM: r3(b.llM), acc: r3(b.acc), diff: b.diff ? { mean: r3(b.diff.mean), ci: b.diff.ci, n: b.diff.n } : null })) } : null,
+      weeks: (s.learnLog || []).slice(-8).map((e) => ({ week: e.week, picks: e.picks, ll: e.ll ? { n: e.ll.n, ours: r3(e.ll.ours), market: r3(e.ll.market) } : null, clv: e.clv ? { n: e.clv.n, ev: r3(e.clv.ev) } : null })),
+      bets: { reel: betSummary((s.realBets || []).filter(isRealBet)), test: betSummary((s.realBets || []).filter((b) => !isRealBet(b))) },
+      sim: cs ? { run: cs.run, capital: cs.capital, safe: cs.safe, injected: cs.injected, peak: cs.peak, runs: (cs.runs || []).map((r) => ({ n: r.n, tickets: r.tickets, won: r.won, result: r.result })),
+        tickets: book((cs.tickets || []).filter((t) => !t.reconstructed), tOdd, one) } : null };
+  }
+
   /* ----------------------------------------------- compactage de l'état */
   /** Une seule prédiction conservée par match (la dernière, figée au coup d'envoi) ; sélections remplacées supprimées ; anciennes analyses allégées */
   function compactState(s, today) {
@@ -1581,6 +1620,6 @@
   function chunkText(txt) { const out = []; for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK)); return out.length ? out : [""]; }
   function dataSignature(ds) { return Object.values(ds.source.repos).map((r) => r.commit).join("-"); }
 
-  FQ.P = { claudeSimEstCands, claudeSimFixMonaco, claudeSimWaitReason, nextScheduled, injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, CLAUDE_SIM, updateClaudeSim, claudeSimPick, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
+  FQ.P = { liveStats, claudeSimEstCands, claudeSimFixMonaco, claudeSimWaitReason, nextScheduled, injuryImpact, INJ_COEF, NEAR_KO_MS, CLOSE_MODEL_W, CLAUDE_SIM, updateClaudeSim, claudeSimPick, valueSummary, sharpRef, logForecasts, forecastEval, flBucket, FL_BUCKETS, coverageReport, isRealBet, migrateBets, betSummary, legProbs, robustP, ticketWhy, selPhrase, buildPrediction, makeSnapshot, standingsSnapshot, demoOddsMap, matchOddsMap, effSettings, upsertPick, settlePicks, kickoffPassed, defaultPlayersFor, computePlayer, analyzeList, auditMatch, resultFromSource, learnCalibration, runCycle, chunkText, dataSignature, CHUNK, HORIZON_DAYS,
     SCENARIOS, scenarios, buildTicket, ticketCandidates, ticketWindow, updateTickets, previewTickets, settleTicket, legWon, compactState, refOdds, closingFor, clvOf, updateClv, updateJournal, TICKET_ARMS, bestTicketFinder, armStats, chooseArm, armFactors, pickArm, armCands, armAllows, legOk, DRAW_PMIN, allowedArms, probOdds, extraOdds, dcOdds, selectionsOf, boostTable, boostFor, boostFn, learnDcFactor };
 })(typeof window !== "undefined" ? window : globalThis);

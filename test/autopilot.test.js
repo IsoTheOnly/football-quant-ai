@@ -449,3 +449,13 @@ test("trêve internationale : attente de la simulation expliquée avec la date d
   const why = P.claudeSimWaitReason(ctx, Date.now());
   assert.match(why, /trêve internationale/); assert.match(why, /28\/10/); assert.match(why, /25\/10/);
 });
+
+test("bilan en conditions réelles : compact, choix et tickets comptés une fois, rendement à mise fixe", () => {
+  const state = FQ.emptyState();
+  state.picks = [{ id: "a", comp: "PL", odds: 2, p: 0.5, status: "GAGNÉ", clv: { ev: 0.05 } }, { id: "b", comp: "PL", odds: 3, p: 0.3, status: "PERDU", clv: { ev: -0.02 } }, { id: "c", comp: "SA", odds: 1.5, p: 0.6, status: "EN ATTENTE" }];
+  state.paperTickets = [{ id: "t", scenario: "sur", totalOdds: 2.5, pJoint: 0.4, status: "GAGNÉ", stake: 1 }];
+  const L = P.liveStats(state);
+  assert.equal(L.picks.done, 2); assert.equal(L.picks.won, 1); assert.equal(L.picks.roi, 0); assert.equal(L.picks.expectedWon, 0.8); assert.equal(L.picks.clv, 0.015);
+  assert.equal(L.tickets.sur.roi, 1.5); assert.equal(L.picksByComp.SA.done, 0);
+  assert.ok(JSON.stringify(L).length < 6000);
+});
